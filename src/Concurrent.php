@@ -410,7 +410,10 @@ class Concurrent implements ArrayAccess, IteratorAggregate
             }
         }
 
-        throw new RuntimeException('Unable to resolve source object. Provide an explicit key or use as a class property.');
+        throw new RuntimeException(
+            'No key provided. Pass a key: new ' . static::class . '(key: "my-key"). '
+            . 'A key can only be omitted when created inside a class constructor as a property.'
+        );
     }
 
     /**
@@ -442,6 +445,9 @@ class Concurrent implements ArrayAccess, IteratorAggregate
             }
         }
 
-        throw new RuntimeException('Unable to determine cache key from source properties.');
+        throw new RuntimeException(
+            'Unable to auto-resolve cache key. Pass a key: new ' . static::class . '(key: "my-key"). '
+            . 'A key can only be omitted when created inside a class constructor as a property.'
+        );
     }
 }

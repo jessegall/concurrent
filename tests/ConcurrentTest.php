@@ -300,6 +300,16 @@ class ConcurrentTest extends TestCase
         $this->assertSame(5, $store->get());
     }
 
+    public function test_throws_when_no_key_and_not_assigned_to_property(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Unable to auto-resolve cache key');
+
+        // Created without a key and not assigned to a class property — key resolution fails
+        $concurrent = new Concurrent(default: 'value', ttl: 60);
+        $concurrent(); // triggers key resolution
+    }
+
     public function test_array_append_with_null_key(): void
     {
         $concurrent = new Concurrent('test:array-append', default: fn () => [], ttl: 60);
