@@ -48,16 +48,27 @@ A key-value map — like Java's `ConcurrentHashMap` or Go's `sync.Map`.
 ```php
 use JesseGall\Concurrent\ConcurrentHashMap;
 
-$settings = new ConcurrentHashMap;
+class FeatureManager
+{
+    private ConcurrentHashMap $flags; // auto-key: "FeatureManager:flags"
 
-$settings->set('dark-mode', true);
-$settings->set('beta-search', false);
+    public function __construct()
+    {
+        $this->flags = new ConcurrentHashMap;
+    }
 
-$settings->get('dark-mode');          // true
-$settings->get('missing', 'default'); // "default"
-$settings->has('dark-mode');          // true
-$settings->remove('beta-search');
-$settings->all();                     // ['dark-mode' => true]
+    // ...
+}
+
+// Or with an explicit key — works anywhere:
+$map = new ConcurrentHashMap('app:settings');
+
+$map->set('dark-mode', true);
+$map->get('dark-mode');          // true
+$map->get('missing', 'default'); // "default"
+$map->has('dark-mode');          // true
+$map->remove('dark-mode');
+$map->all();                     // []
 ```
 
 ### ConcurrentSet
@@ -67,17 +78,29 @@ A collection of unique values — duplicates are ignored.
 ```php
 use JesseGall\Concurrent\ConcurrentSet;
 
-$online = new ConcurrentSet;
+class PresenceTracker
+{
+    private ConcurrentSet $online; // auto-key: "PresenceTracker:online"
 
-$online->add('alice');
-$online->add('bob');
-$online->add('alice');    // ignored — already in set
+    public function __construct()
+    {
+        $this->online = new ConcurrentSet;
+    }
 
-$online->contains('alice'); // true
-$online->count();           // 2
-$online->all();             // ['alice', 'bob']
-$online->remove('bob');
-$online->clear();
+    // ...
+}
+
+// Or with an explicit key:
+$set = new ConcurrentSet('users:online');
+
+$set->add('alice');
+$set->add('bob');
+$set->add('alice');           // ignored — already in set
+$set->contains('alice');      // true
+$set->count();                // 2
+$set->all();                  // ['alice', 'bob']
+$set->remove('bob');
+$set->clear();
 ```
 
 ### ConcurrentCounter
@@ -87,13 +110,26 @@ An atomic counter — safe increment/decrement across processes.
 ```php
 use JesseGall\Concurrent\ConcurrentCounter;
 
-$visitors = new ConcurrentCounter;
+class HitCounter
+{
+    private ConcurrentCounter $hits; // auto-key: "HitCounter:hits"
 
-$visitors->increment();
-$visitors->increment(5);
-$visitors->decrement();
-$visitors->count();    // 5
-$visitors->reset();
+    public function __construct()
+    {
+        $this->hits = new ConcurrentCounter;
+    }
+
+    // ...
+}
+
+// Or with an explicit key:
+$counter = new ConcurrentCounter('stats:visitors');
+
+$counter->increment();
+$counter->increment(5);
+$counter->decrement();
+$counter->count();    // 5
+$counter->reset();
 ```
 
 ### ConcurrentQueue
@@ -103,16 +139,29 @@ A FIFO queue — push from one process, pop from another.
 ```php
 use JesseGall\Concurrent\ConcurrentQueue;
 
-$events = new ConcurrentQueue;
+class EventBuffer
+{
+    private ConcurrentQueue $events; // auto-key: "EventBuffer:events"
 
-$events->push(['type' => 'order.created', 'id' => 42]);
-$events->push(['type' => 'user.registered', 'id' => 7]);
+    public function __construct()
+    {
+        $this->events = new ConcurrentQueue;
+    }
 
-$events->peek();     // ['type' => 'order.created', 'id' => 42] (doesn't remove)
-$events->pop();      // ['type' => 'order.created', 'id' => 42] (removes)
-$events->size();     // 1
-$events->isEmpty();  // false
-$events->clear();
+    // ...
+}
+
+// Or with an explicit key:
+$queue = new ConcurrentQueue('app:event-buffer');
+
+$queue->push(['type' => 'order.created', 'id' => 42]);
+$queue->push(['type' => 'user.registered', 'id' => 7]);
+
+$queue->peek();     // ['type' => 'order.created', ...] (doesn't remove)
+$queue->pop();      // ['type' => 'order.created', ...] (removes)
+$queue->size();     // 1
+$queue->isEmpty();  // false
+$queue->clear();
 ```
 
 ## Quick Start
