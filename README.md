@@ -66,7 +66,7 @@ Process B sees the T-Shirt that Process A added because they use the same cache 
 
 ### Scalar values and arrays
 
-Concurrent also works with simple values — use the `__invoke()` method to get, set, or forget:
+Concurrent also works with simple values — invoke the instance directly to get, set, or forget:
 
 ```php
 $counter = new Concurrent(key: 'visitor-count', default: 0, ttl: 3600);
@@ -82,27 +82,42 @@ $settings = new Concurrent(key: 'app-settings', default: fn () => [], ttl: 7200)
 $settings['theme'] = 'dark';
 $settings['locale'] = 'en';
 isset($settings['theme']); // true
+
+foreach ($settings as $key => $value) {
+    echo "{$key}: {$value}\n"; // theme: dark, locale: en
+}
 ```
 
 ## Real-World Example: CSV Processing with Live Progress
 
 A user uploads a 50,000-row CSV. A queue job processes it in the background. The frontend polls for progress so the user sees a live progress bar, the current step, and any row errors — all in real-time.
 
-**Step 1: Define the shared state as a plain object**
+**Step 1: Define the session as a Concurrent subclass**
 
-No cache logic here — just the data and methods to manipulate it:
+The session extends `Concurrent` and implements `DeclaresReadOnlyMethods`. The data object holds the state, and the session provides writer methods that invoke the instance for atomic updates. Reader methods are proxied to the data object and skip locking:
 
 ```php
+use JesseGall\Concurrent\Concurrent;
 use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
 
-class CsvProcessingSession implements DeclaresReadOnlyMethods
+/**
+ * @mixin CsvProcessingData
+ */
+class CsvProcessingSession extends Concurrent implements DeclaresReadOnlyMethods
 {
-    public int $processedRows = 0;
-    public int $totalRows = 0;
-    public string $status = 'pending'; // pending, processing, completed, failed
-    public string|null $currentStep = null;
-    public array $rowErrors = [];
+    public function __construct(string $uploadId)
+    {
+        parent::__construct(
+            key: "csv-processing:{$uploadId}",
+            default: fn () => new CsvProcessingData(),
+            ttl: 3600,
+            validator: fn ($value) => $value instanceof CsvProcessingData, // rejects stale/corrupt cache entries
+        );
+    }
 
+    // Optional optimization: these methods only read state, so they skip
+    // the lock and don't write back to cache. Without this, they'd still
+    // work — the overhead is minimal, but avoidable.
     public static function readOnlyMethods(): array
     {
         return ['getProgress', 'getStatus', 'getCurrentStep', 'getErrors'];
@@ -110,84 +125,85 @@ class CsvProcessingSession implements DeclaresReadOnlyMethods
 
     // --- Writers (called by queue job) ---
 
+    // Invoke with a callback when you need to update multiple fields
+    // atomically — the callback receives the current data, and the returned
+    // value is written back in a single lock cycle.
     public function start(int $totalRows): void
     {
-        $this->totalRows = $totalRows;
-        $this->status = 'processing';
+        $this(function (CsvProcessingData $data) use ($totalRows) {
+            $data->totalRows = $totalRows;
+            $data->status = 'processing';
+
+            return $data;
+        });
     }
 
+    // For single-field increments, property proxy works fine —
+    // PHP translates ++ into __get (read) + __set (write), both locked.
     public function advanceRow(): void
     {
         $this->processedRows++;
     }
 
+    // For simple overwrites that don't depend on the current value,
+    // property proxy via __set is fine — no need for a callback.
     public function step(string $name): void
     {
         $this->currentStep = $name;
     }
 
+    // Appending to an array is a read-modify-write — invoke with a callback.
     public function reportError(int $row, string $message): void
     {
-        $this->rowErrors[] = "Row {$row}: {$message}";
+        $this(function (CsvProcessingData $data) use ($row, $message) {
+            $data->rowErrors[] = "Row {$row}: {$message}";
+
+            return $data;
+        });
     }
 
+    // Multiple fields + clearing a value = invoke with a callback for atomicity.
     public function complete(): void
     {
-        $this->status = 'completed';
-        $this->currentStep = null;
+        $this(function (CsvProcessingData $data) {
+            $data->status = 'completed';
+            $data->currentStep = null;
+
+            return $data;
+        });
     }
+}
 
-    // --- Readers (called by frontend) ---
+class CsvProcessingData
+{
+    public int $processedRows = 0;
+    public int $totalRows = 0;
+    public string $status = 'pending';
+    public string|null $currentStep = null;
+    public array $rowErrors = [];
 
+    // Reader methods — proxied through __call, declared read-only above
     public function getProgress(): int
     {
-        if ($this->totalRows === 0) return 0;
-        return (int) round(($this->processedRows / $this->totalRows) * 100);
+        return $this->totalRows > 0
+            ? (int) round(($this->processedRows / $this->totalRows) * 100)
+            : 0;
     }
 
-    public function getStatus(): string
-    {
-        return $this->status;
-    }
-
-    public function getCurrentStep(): string|null
-    {
-        return $this->currentStep;
-    }
-
-    public function getErrors(): array
-    {
-        return $this->rowErrors;
-    }
+    public function getStatus(): string       { return $this->status; }
+    public function getCurrentStep(): ?string { return $this->currentStep; }
+    public function getErrors(): array        { return $this->rowErrors; }
 }
 ```
 
-**Step 2: Wrap it in Concurrent — same key in both processes**
-
-```php
-use JesseGall\Concurrent\Concurrent;
-
-// This factory can live anywhere — a helper, a static method, etc.
-// Any process using the same key sees the same session.
-/** @return Concurrent<CsvProcessingSession> */
-function csvSession(string $uploadId): Concurrent
-{
-    return new Concurrent(
-        key: "csv-processing:{$uploadId}",
-        default: fn () => new CsvProcessingSession(),
-        ttl: 3600,
-    );
-}
-```
-
-**Step 3: Queue job writes progress**
+**Step 2: Queue job writes progress**
 
 ```php
 class ProcessCsvJob implements ShouldQueue
 {
     public function handle(): void
     {
-        $session = csvSession($this->uploadId);
+        $session = new CsvProcessingSession($this->uploadId);
         $rows = $this->parseRows();
 
         $session->start(count($rows));
@@ -208,18 +224,17 @@ class ProcessCsvJob implements ShouldQueue
 }
 ```
 
-**Step 4: Controller reads progress for the frontend**
+**Step 3: Controller reads progress for the frontend**
 
 ```php
 class CsvUploadController
 {
     public function progress(string $uploadId): array
     {
-        $session = csvSession($uploadId);
+        $session = new CsvProcessingSession($uploadId);
 
-        // Reader methods — no lock, no write-back, fast
         return [
-            'progress' => $session->getProgress(),    // 73
+            'progress' => $session->getProgress(),    // 73 (proxied through CsvProcessingData::getProgress)
             'status'   => $session->getStatus(),      // "processing"
             'step'     => $session->getCurrentStep(),  // "Validating rows..."
             'errors'   => $session->getErrors(),       // ["Row 42: Invalid email"]
@@ -228,7 +243,32 @@ class CsvUploadController
 }
 ```
 
-The queue job and the controller run in completely different processes, but they share state through the same cache key. Writer methods lock and persist; reader methods just read — no overhead.
+The queue job and the controller create their own `CsvProcessingSession` instances — but since they use the same upload ID, they share the same cache key and therefore the same state. Writer methods lock and persist; reader methods just read — no overhead.
+
+## Real-World Example: ConcurrentHashMap
+
+PHP doesn't have a built-in thread-safe hash map (like Java's `ConcurrentHashMap` or Go's `sync.Map`). This package ships with one out of the box — `ConcurrentHashMap`:
+
+Multiple processes can safely read and write to the same map without race conditions:
+
+```php
+use JesseGall\Concurrent\ConcurrentHashMap;
+
+$settings = new ConcurrentHashMap('app:feature-flags');
+
+// Process A (deploy script):
+$settings->set('dark-mode', true);
+$settings->set('beta-search', false);
+
+// Process B (web request):
+if ($settings->get('dark-mode')) {
+    // feature is enabled
+}
+
+// Process C (admin panel):
+$settings->remove('beta-search');
+$settings->has('beta-search'); // false
+```
 
 ## Read-Only Methods
 
@@ -262,67 +302,84 @@ class Counter implements DeclaresReadOnlyMethods
 
 ## ConcurrentClassMember
 
-When you use `Concurrent` as a property on a class, you normally have to specify a cache key manually. `ConcurrentClassMember` removes that — it automatically generates the cache key from the owning class name and property name.
+If you want to easily have concurrent properties on a class, use `ConcurrentClassMember`. It automatically generates the cache key from the owning class and property name — no manual key coordination needed.
 
-This is especially useful when a class needs to share state across processes (e.g., between a controller and a queue worker) without coordinating cache keys.
+Any instance of the same class will share the same cached value for that property, across processes.
 
 ```php
 use JesseGall\Concurrent\ConcurrentClassMember;
 
-class ProductImporter
+class ConcurrentHashMap extends ConcurrentClassMember
 {
-    /** @var ConcurrentClassMember<ImportProgress> */
-    private ConcurrentClassMember $progress;
-
     public function __construct()
     {
-        // Key is auto-generated: "ProductImporter:progress"
-        $this->progress = new ConcurrentClassMember(
-            default: fn () => new ImportProgress(),
-            ttl: 300,
+        parent::__construct(
+            default: fn () => [],
+            ttl: 3600,
         );
     }
 
-    public function import(array $products): void
+    public function get(string $key, mixed $default = null): mixed
     {
-        $this->progress->total = count($products);
-        $this->progress->status = 'processing';
-
-        foreach ($products as $product) {
-            $this->processProduct($product);
-            $this->progress->imported++;
-        }
-
-        $this->progress->status = 'completed';
+        return $this[$key] ?? $default;
     }
 
-    public function getProgress(): ImportProgress
+    public function set(string $key, mixed $value): void
     {
-        // Returns the cached ImportProgress — readable by any other process
-        return $this->progress();
+        $this(function (array $map) use ($key, $value) {
+            $map[$key] = $value;
+
+            return $map;
+        });
+    }
+
+    public function remove(string $key): void
+    {
+        $this(function (array $map) use ($key) {
+            unset($map[$key]);
+
+            return $map;
+        });
+    }
+
+    public function has(string $key): bool
+    {
+        return isset($this[$key]);
     }
 }
 
-class ImportProgress
+class RateLimiter
 {
-    public int $imported = 0;
-    public int $total = 0;
-    public string $status = 'pending';
+    // Key is auto-generated: "RateLimiter:attempts"
+    private ConcurrentHashMap $attempts;
 
-    public function percentage(): int
+    public function __construct()
     {
-        return $this->total > 0
-            ? (int) round(($this->imported / $this->total) * 100)
-            : 0;
+        $this->attempts = new ConcurrentHashMap();
+    }
+
+    public function hit(string $ip): void
+    {
+        $this->attempts->set($ip, $this->attempts->get($ip, 0) + 1);
+    }
+
+    public function isLimited(string $ip): bool
+    {
+        return $this->attempts->get($ip, 0) >= 10;
+    }
+
+    public function reset(string $ip): void
+    {
+        $this->attempts->remove($ip);
     }
 }
 ```
 
-The generated key is deterministic — any instance of `ProductImporter` will use the key `"ProductImporter:progress"`. A queue worker writing progress and a controller reading it automatically share the same cache entry, with no manual key coordination.
+The key `"RateLimiter:attempts"` is deterministic — a web request incrementing attempts and a cleanup job resetting them will share the same cache entry automatically.
 
 ## Extending Concurrent
 
-Instead of wrapping a plain object, you can extend `Concurrent` or `ConcurrentClassMember` directly. This lets you encapsulate the default value, TTL, and domain-specific methods inside the class itself. You can also add your own methods that operate on the wrapped value — using `__invoke` for atomic multi-field updates, or property proxying for simple writes:
+Instead of wrapping a plain object, you can extend `Concurrent` or `ConcurrentClassMember` directly. This lets you encapsulate the default value, TTL, and domain-specific methods inside the class itself. You can also add your own methods that operate on the wrapped value — invoking with a callback for atomic multi-field updates, or property proxying for simple writes:
 
 ```php
 use JesseGall\Concurrent\Concurrent;
@@ -355,7 +412,7 @@ class ImportProgress extends Concurrent
         );
     }
 
-    // Use __invoke for atomic updates that touch multiple fields
+    // Invoke with a callback for atomic updates that touch multiple fields
     public function start(int $total): void
     {
         $this(function (ImportProgressData $data) use ($total) {
@@ -366,17 +423,14 @@ class ImportProgress extends Concurrent
         });
     }
 
-    // Use __invoke for read-modify-write on a single field
+    // Single-field increments work through property proxy —
+    // PHP translates ++ into __get + __set, both locked.
     public function advance(): void
     {
-        $this(function (ImportProgressData $data) {
-            $data->imported++;
-
-            return $data;
-        });
+        $this->imported++;
     }
 
-    // Simple property writes work through the proxy too
+    // Simple overwrites work through property proxy too.
     public function complete(): void
     {
         $this->status = 'completed';
@@ -428,7 +482,10 @@ This way the `default`, `ttl`, and domain methods live with the class definition
 
 ## Validation
 
-Validate values before they're stored:
+The validator runs in two places:
+
+- **On write** — setting an invalid value throws `InvalidArgumentException`
+- **On read** — if the cached value fails validation (e.g., corrupted or from an old code version), it's silently discarded and the default is returned instead
 
 ```php
 $temperature = new Concurrent(
@@ -440,6 +497,9 @@ $temperature = new Concurrent(
 
 $temperature(22.5); // OK
 $temperature(999.0); // throws InvalidArgumentException
+
+// If something else writes garbage to the same cache key,
+// reading it returns the default (20.0) instead of crashing.
 ```
 
 ## ConcurrentApi Trait
@@ -476,6 +536,37 @@ $queue->withLock(fn ($v) => /* ... */); // explicit lock
 5. The lock is **released**
 
 This ensures that concurrent processes never overwrite each other's changes. The lock uses Redis/database-backed distributed locking with automatic timeout.
+
+### When to invoke vs property proxy
+
+| Operation | Use | Example |
+|---|---|---|
+| Simple overwrite | Property proxy | `$this->status = 'done'` |
+| Increment / decrement | Property proxy | `$this->count++` |
+| Update multiple fields atomically | Invoke with callback | `$this(fn ($d) => ...)` |
+| Append to array property | Invoke with callback | `$this(fn ($d) => $d->items[] = ...)` |
+| Read-modify-write with logic | Invoke with callback | `$this(fn ($d) => ...)` |
+
+## Caveats
+
+Modifying nested properties through `__get` doesn't work as expected. This is a PHP limitation, not a Concurrent bug — `__get` returns a copy, so changes to it are lost.
+
+```php
+// These silently do nothing — the changes are lost:
+$concurrent->items[] = 'new';           // appending to a nested array
+$concurrent->skipped['key'] = 'value';  // setting a key on a nested array
+$concurrent->address->city = 'Berlin';  // modifying a nested object property
+
+// Use invoke with a callback instead:
+$concurrent(function ($data) {
+    $data->items[] = 'new';
+    $data->skipped['key'] = 'value';
+
+    return $data;
+});
+```
+
+Some of these may throw an `Indirect modification` notice, but others fail silently — so always use a callback for nested modifications.
 
 ## Requirements
 

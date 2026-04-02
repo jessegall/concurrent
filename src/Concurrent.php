@@ -345,4 +345,5 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
         return false;
     }
+
 }

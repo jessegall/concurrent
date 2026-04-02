@@ -3,6 +3,7 @@
 namespace JesseGall\Concurrent\Tests;
 
 use JesseGall\Concurrent\Concurrent;
+use JesseGall\Concurrent\ConcurrentClassMember;
 use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
 
 class ConcurrentTest extends TestCase
@@ -404,6 +405,21 @@ class ConcurrentTest extends TestCase
         $this->assertSame(1, $session->processedRows);
     }
 
+    public function test_property_increment_via_proxy(): void
+    {
+        $obj = new class {
+            public int $count = 0;
+        };
+
+        $concurrent = new Concurrent('test:increment', default: fn () => clone $obj, ttl: 60);
+
+        $concurrent->count++;
+        $concurrent->count++;
+        $concurrent->count++;
+
+        $this->assertSame(3, $concurrent->count);
+    }
+
     public function test_subclass_wraps_object_with_custom_methods(): void
     {
         $progress = new TestImportProgress('shop-123');
@@ -433,6 +449,42 @@ class ConcurrentTest extends TestCase
         $this->assertSame(50, $second->total);
         $this->assertSame(1, $second->imported);
         $this->assertSame('processing', $second->status);
+    }
+
+    public function test_concurrent_hash_map(): void
+    {
+        $limiter = new TestRateLimiter;
+
+        $limiter->hit('192.168.1.1');
+        $limiter->hit('192.168.1.1');
+        $limiter->hit('192.168.1.1');
+        $limiter->hit('10.0.0.1');
+
+        $this->assertSame(3, $limiter->getAttempts('192.168.1.1'));
+        $this->assertSame(1, $limiter->getAttempts('10.0.0.1'));
+        $this->assertFalse($limiter->isLimited('192.168.1.1'));
+    }
+
+    public function test_concurrent_hash_map_persists_across_instances(): void
+    {
+        $first = new TestRateLimiter;
+        $first->hit('192.168.1.1');
+        $first->hit('192.168.1.1');
+
+        // New instance — same auto-generated key, same cached state
+        $second = new TestRateLimiter;
+        $this->assertSame(2, $second->getAttempts('192.168.1.1'));
+    }
+
+    public function test_concurrent_hash_map_reset(): void
+    {
+        $limiter = new TestRateLimiter;
+        $limiter->hit('192.168.1.1');
+        $limiter->hit('192.168.1.1');
+
+        $limiter->reset('192.168.1.1');
+
+        $this->assertSame(0, $limiter->getAttempts('192.168.1.1'));
     }
 }
 
@@ -597,3 +649,73 @@ class TestCsvProcessingSession extends Concurrent implements DeclaresReadOnlyMet
         });
     }
 }
+
+class TestConcurrentHashMap extends ConcurrentClassMember
+{
+    public function __construct()
+    {
+        parent::__construct(
+            default: fn () => [],
+            ttl: 3600,
+        );
+    }
+
+    public function get(string $key, mixed $default = null): mixed
+    {
+        return $this[$key] ?? $default;
+    }
+
+    public function set(string $key, mixed $value): void
+    {
+        $this(function (array $map) use ($key, $value) {
+            $map[$key] = $value;
+
+            return $map;
+        });
+    }
+
+    public function remove(string $key): void
+    {
+        $this(function (array $map) use ($key) {
+            unset($map[$key]);
+
+            return $map;
+        });
+    }
+
+    public function has(string $key): bool
+    {
+        return isset($this[$key]);
+    }
+}
+
+class TestRateLimiter
+{
+    private TestConcurrentHashMap $attempts;
+
+    public function __construct()
+    {
+        $this->attempts = new TestConcurrentHashMap();
+    }
+
+    public function hit(string $ip): void
+    {
+        $this->attempts->set($ip, $this->attempts->get($ip, 0) + 1);
+    }
+
+    public function isLimited(string $ip): bool
+    {
+        return $this->attempts->get($ip, 0) >= 10;
+    }
+
+    public function getAttempts(string $ip): int
+    {
+        return $this->attempts->get($ip, 0);
+    }
+
+    public function reset(string $ip): void
+    {
+        $this->attempts->remove($ip);
+    }
+}
+
