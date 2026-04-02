@@ -17,9 +17,9 @@ When multiple processes (web requests, queue workers, cron jobs) need to share s
 ## Table of Contents
 
 - [Installation](#installation)
-- [Quick Start](#quick-start)
 - [Built-in Data Structures](#built-in-data-structures)
-- [Real-World Example: CSV Processing](#real-world-example-csv-processing-with-live-progress)
+- [Quick Start](#quick-start)
+- [Building a Custom Concurrent Class](#building-a-custom-concurrent-class)
 - [ConcurrentClassMember](#concurrentclassmember)
 - [Extending Concurrent](#extending-concurrent)
 - [ConcurrentApi Trait](#concurrentapi-trait)
@@ -33,6 +33,84 @@ When multiple processes (web requests, queue workers, cron jobs) need to share s
 
 ```bash
 composer require jessegall/concurrent
+```
+
+## Built-in Data Structures
+
+The package ships with thread-safe versions of common data structures. Each is backed by cache and safe to use across processes.
+
+### ConcurrentHashMap
+
+A key-value map — like Java's `ConcurrentHashMap` or Go's `sync.Map`.
+
+```php
+use JesseGall\Concurrent\ConcurrentHashMap;
+
+$settings = new ConcurrentHashMap('app:feature-flags');
+
+$settings->set('dark-mode', true);
+$settings->set('beta-search', false);
+
+$settings->get('dark-mode');          // true
+$settings->get('missing', 'default'); // "default"
+$settings->has('dark-mode');          // true
+$settings->remove('beta-search');
+$settings->all();                     // ['dark-mode' => true]
+```
+
+### ConcurrentSet
+
+A collection of unique values — duplicates are ignored.
+
+```php
+use JesseGall\Concurrent\ConcurrentSet;
+
+$online = new ConcurrentSet('users:online');
+
+$online->add('alice');
+$online->add('bob');
+$online->add('alice');    // ignored — already in set
+
+$online->contains('alice'); // true
+$online->count();           // 2
+$online->all();             // ['alice', 'bob']
+$online->remove('bob');
+$online->clear();
+```
+
+### ConcurrentCounter
+
+An atomic counter — safe increment/decrement across processes.
+
+```php
+use JesseGall\Concurrent\ConcurrentCounter;
+
+$visitors = new ConcurrentCounter('stats:visitors');
+
+$visitors->increment();
+$visitors->increment(5);
+$visitors->decrement();
+$visitors->count();    // 5
+$visitors->reset();
+```
+
+### ConcurrentQueue
+
+A FIFO queue — push from one process, pop from another.
+
+```php
+use JesseGall\Concurrent\ConcurrentQueue;
+
+$events = new ConcurrentQueue('app:event-buffer');
+
+$events->push(['type' => 'order.created', 'id' => 42]);
+$events->push(['type' => 'user.registered', 'id' => 7]);
+
+$events->peek();     // ['type' => 'order.created', 'id' => 42] (doesn't remove)
+$events->pop();      // ['type' => 'order.created', 'id' => 42] (removes)
+$events->size();     // 1
+$events->isEmpty();  // false
+$events->clear();
 ```
 
 ## Quick Start
@@ -105,7 +183,7 @@ foreach ($settings as $key => $value) {
 }
 ```
 
-## Real-World Example: CSV Processing with Live Progress
+## Building a Custom Concurrent Class
 
 A user uploads a 50,000-row CSV. A queue job processes it in the background. The frontend polls for progress so the user sees a live progress bar, the current step, and any row errors — all in real-time.
 
@@ -261,84 +339,6 @@ class CsvUploadController
 ```
 
 The queue job and the controller create their own `CsvProcessingSession` instances — but since they use the same upload ID, they share the same cache key and therefore the same state. Writer methods lock and persist; reader methods just read — no overhead.
-
-## Built-in Data Structures
-
-The package ships with thread-safe versions of common data structures. Each is backed by cache and safe to use across processes.
-
-### ConcurrentHashMap
-
-A key-value map — like Java's `ConcurrentHashMap` or Go's `sync.Map`.
-
-```php
-use JesseGall\Concurrent\ConcurrentHashMap;
-
-$settings = new ConcurrentHashMap('app:feature-flags');
-
-$settings->set('dark-mode', true);
-$settings->set('beta-search', false);
-
-$settings->get('dark-mode');          // true
-$settings->get('missing', 'default'); // "default"
-$settings->has('dark-mode');          // true
-$settings->remove('beta-search');
-$settings->all();                     // ['dark-mode' => true]
-```
-
-### ConcurrentSet
-
-A collection of unique values — duplicates are ignored.
-
-```php
-use JesseGall\Concurrent\ConcurrentSet;
-
-$online = new ConcurrentSet('users:online');
-
-$online->add('alice');
-$online->add('bob');
-$online->add('alice');    // ignored — already in set
-
-$online->contains('alice'); // true
-$online->count();           // 2
-$online->all();             // ['alice', 'bob']
-$online->remove('bob');
-$online->clear();
-```
-
-### ConcurrentCounter
-
-An atomic counter — safe increment/decrement across processes.
-
-```php
-use JesseGall\Concurrent\ConcurrentCounter;
-
-$visitors = new ConcurrentCounter('stats:visitors');
-
-$visitors->increment();
-$visitors->increment(5);
-$visitors->decrement();
-$visitors->count();    // 5
-$visitors->reset();
-```
-
-### ConcurrentQueue
-
-A FIFO queue — push from one process, pop from another.
-
-```php
-use JesseGall\Concurrent\ConcurrentQueue;
-
-$events = new ConcurrentQueue('app:event-buffer');
-
-$events->push(['type' => 'order.created', 'id' => 42]);
-$events->push(['type' => 'user.registered', 'id' => 7]);
-
-$events->peek();     // ['type' => 'order.created', 'id' => 42] (doesn't remove)
-$events->pop();      // ['type' => 'order.created', 'id' => 42] (removes)
-$events->size();     // 1
-$events->isEmpty();  // false
-$events->clear();
-```
 
 ## ConcurrentClassMember
 
