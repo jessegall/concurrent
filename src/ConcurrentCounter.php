@@ -16,7 +16,7 @@ class ConcurrentCounter extends Concurrent
             key: $key,
             default: 0,
             ttl: $ttl,
-            validator: fn ($v) => is_int($v),
+            validator: fn ($v) => is_numeric($v),
         );
     }
 
@@ -41,7 +41,7 @@ class ConcurrentCounter extends Concurrent
      */
     public function count(): int
     {
-        return $this();
+        return (int) $this();
     }
 
     /**
