@@ -300,14 +300,22 @@ class ConcurrentTest extends TestCase
         $this->assertSame(5, $store->get());
     }
 
-    public function test_throws_when_no_key_and_not_assigned_to_property(): void
+    public function test_throws_when_no_key_and_not_in_constructor(): void
     {
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Unable to auto-resolve cache key');
+        $this->expectExceptionMessage('No key provided');
 
-        // Created without a key and not assigned to a class property — key resolution fails
-        $concurrent = new Concurrent(default: 'value', ttl: 60);
-        $concurrent(); // triggers key resolution
+        // Created without a key outside a constructor — fails immediately
+        new Concurrent(default: 'value', ttl: 60);
+    }
+
+    public function test_throws_when_no_key_in_regular_method(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('No key provided');
+
+        $obj = new TestCreatesInMethod;
+        $obj->create();
     }
 
     public function test_array_append_with_null_key(): void
@@ -726,6 +734,14 @@ class TestRateLimiter
     public function reset(string $ip): void
     {
         $this->attempts->remove($ip);
+    }
+}
+
+class TestCreatesInMethod
+{
+    public function create(): Concurrent
+    {
+        return new Concurrent(default: 'value', ttl: 60);
     }
 }
 

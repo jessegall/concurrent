@@ -403,8 +403,9 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         foreach ($source as $item)
         {
             $object = $item['object'] ?? null;
+            $function = $item['function'] ?? null;
 
-            if ($object && $object !== $this)
+            if ($object && $object !== $this && $function === '__construct')
             {
                 return $object;
             }
