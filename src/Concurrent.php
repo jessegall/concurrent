@@ -174,6 +174,10 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
         // -- Read cached value (no lock) --
         if ($read) {
+            if (! is_callable($value)) {
+                throw new InvalidArgumentException('The value must be callable when using read mode.');
+            }
+
             return $value($this->get());
         }
 
