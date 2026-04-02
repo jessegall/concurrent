@@ -92,6 +92,20 @@ class ConcurrentSetTest extends TestCase
         $this->assertTrue($second->contains('shared'));
     }
 
+    public function test_contains_on_empty_set(): void
+    {
+        $set = new ConcurrentSet('test:set-empty-contains');
+
+        $this->assertFalse($set->contains('anything'));
+    }
+
+    public function test_all_when_empty(): void
+    {
+        $set = new ConcurrentSet('test:set-empty-all');
+
+        $this->assertSame([], $set->all());
+    }
+
     public function test_auto_key_as_class_property(): void
     {
         $owner = new TestSetOwner;

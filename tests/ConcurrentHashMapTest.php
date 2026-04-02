@@ -96,6 +96,13 @@ class ConcurrentHashMapTest extends TestCase
         $this->assertSame('from-b', $b->get('key'));
     }
 
+    public function test_all_when_empty(): void
+    {
+        $map = new ConcurrentHashMap('test:hashmap-empty-all');
+
+        $this->assertSame([], $map->all());
+    }
+
     public function test_auto_key_as_class_property(): void
     {
         $owner = new TestHashMapOwner;

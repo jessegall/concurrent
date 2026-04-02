@@ -121,6 +121,26 @@ class ConcurrentQueueTest extends TestCase
         $this->assertSame(['key' => 'value'], $queue->pop());
     }
 
+    public function test_size_when_empty(): void
+    {
+        $queue = new ConcurrentQueue('test:queue-empty-size');
+
+        $this->assertSame(0, $queue->size());
+    }
+
+    public function test_pop_until_empty(): void
+    {
+        $queue = new ConcurrentQueue('test:queue-drain');
+
+        $queue->push('a');
+        $queue->push('b');
+
+        $this->assertSame('a', $queue->pop());
+        $this->assertSame('b', $queue->pop());
+        $this->assertNull($queue->pop());
+        $this->assertTrue($queue->isEmpty());
+    }
+
     public function test_auto_key_as_class_property(): void
     {
         $owner = new TestQueueOwner;

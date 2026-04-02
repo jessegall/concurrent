@@ -83,6 +83,26 @@ class ConcurrentCounterTest extends TestCase
         $this->assertSame(7, $second->count());
     }
 
+    public function test_increment_by_zero(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-zero-inc');
+
+        $counter->increment(5);
+        $counter->increment(0);
+
+        $this->assertSame(5, $counter->count());
+    }
+
+    public function test_decrement_by_zero(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-zero-dec');
+
+        $counter->increment(5);
+        $counter->decrement(0);
+
+        $this->assertSame(5, $counter->count());
+    }
+
     public function test_auto_key_as_class_property(): void
     {
         $owner = new TestCounterOwner;
