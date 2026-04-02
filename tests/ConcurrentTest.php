@@ -361,6 +361,49 @@ class ConcurrentTest extends TestCase
         $this->assertSame(10, $concurrent->value);
     }
 
+    public function test_subclass_with_declares_read_only_methods(): void
+    {
+        $session = new TestCsvProcessingSession('upload-123');
+
+        // Writers — lock + write
+        $session->start(1000);
+        $this->assertSame(1000, $session->totalRows);
+        $this->assertSame('processing', $session->status);
+
+        $session->advanceRow();
+        $session->advanceRow();
+        $session->advanceRow();
+
+        $session->step('Validating rows...');
+        $session->reportError(42, 'Invalid email');
+
+        // Readers — no lock, no write-back
+        $this->assertSame(0, $session->getProgress()); // 3/1000 rounds to 0
+        $this->assertSame('processing', $session->getStatus());
+        $this->assertSame('Validating rows...', $session->getCurrentStep());
+        $this->assertSame(['Row 42: Invalid email'], $session->getErrors());
+
+        $session->complete();
+        $this->assertSame('completed', $session->getStatus());
+        $this->assertNull($session->getCurrentStep());
+    }
+
+    public function test_subclass_read_only_methods_do_not_persist_mutations(): void
+    {
+        $session = new TestCsvProcessingSession('upload-readonly');
+
+        $session->start(10);
+        $session->advanceRow();
+
+        // getProgress is read-only — even if the underlying object were mutated
+        // during the call, it would NOT be written back to cache
+        $progress = $session->getProgress();
+        $this->assertSame(10, $progress);
+
+        // State is unchanged
+        $this->assertSame(1, $session->processedRows);
+    }
+
     public function test_subclass_wraps_object_with_custom_methods(): void
     {
         $progress = new TestImportProgress('shop-123');
@@ -458,5 +501,99 @@ class TestImportProgress extends Concurrent
     public function complete(): void
     {
         $this->status = 'completed';
+    }
+}
+
+class TestCsvProcessingSessionData
+{
+    public int $processedRows = 0;
+    public int $totalRows = 0;
+    public string $status = 'pending';
+    public string|null $currentStep = null;
+    public array $rowErrors = [];
+
+    public function getProgress(): int
+    {
+        return $this->totalRows > 0
+            ? (int) round(($this->processedRows / $this->totalRows) * 100)
+            : 0;
+    }
+
+    public function getStatus(): string
+    {
+        return $this->status;
+    }
+
+    public function getCurrentStep(): string|null
+    {
+        return $this->currentStep;
+    }
+
+    public function getErrors(): array
+    {
+        return $this->rowErrors;
+    }
+}
+
+/**
+ * @mixin TestCsvProcessingSessionData
+ */
+class TestCsvProcessingSession extends Concurrent implements DeclaresReadOnlyMethods
+{
+    public function __construct(string $uploadId)
+    {
+        parent::__construct(
+            key: "test:csv-processing:{$uploadId}",
+            default: fn () => new TestCsvProcessingSessionData(),
+            ttl: 3600,
+        );
+    }
+
+    public static function readOnlyMethods(): array
+    {
+        return ['getProgress', 'getStatus', 'getCurrentStep', 'getErrors'];
+    }
+
+    public function start(int $totalRows): void
+    {
+        $this(function (TestCsvProcessingSessionData $data) use ($totalRows) {
+            $data->totalRows = $totalRows;
+            $data->status = 'processing';
+
+            return $data;
+        });
+    }
+
+    public function advanceRow(): void
+    {
+        $this(function (TestCsvProcessingSessionData $data) {
+            $data->processedRows++;
+
+            return $data;
+        });
+    }
+
+    public function step(string $name): void
+    {
+        $this->currentStep = $name;
+    }
+
+    public function reportError(int $row, string $message): void
+    {
+        $this(function (TestCsvProcessingSessionData $data) use ($row, $message) {
+            $data->rowErrors[] = "Row {$row}: {$message}";
+
+            return $data;
+        });
+    }
+
+    public function complete(): void
+    {
+        $this(function (TestCsvProcessingSessionData $data) {
+            $data->status = 'completed';
+            $data->currentStep = null;
+
+            return $data;
+        });
     }
 }

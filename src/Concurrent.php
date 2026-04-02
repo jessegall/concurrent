@@ -55,15 +55,16 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     protected readonly ConcurrentValueValidator $validator;
 
     /**
-     * @param  string|array<string>|null  $tags
+     * @param string|array<string>|null $tags
      */
     public function __construct(
-        protected(set) string $key,
-        public readonly mixed $default = null,
-        public readonly int $ttl = 300,
-        callable|null $validator = null,
+        protected(set) string             $key,
+        public readonly mixed             $default = null,
+        public readonly int               $ttl = 300,
+        callable|null                     $validator = null,
         public readonly string|array|null $tags = null,
-    ) {
+    )
+    {
         $this->validator = new ConcurrentValueValidator($validator);
     }
 
@@ -84,27 +85,22 @@ class Concurrent implements ArrayAccess, IteratorAggregate
      */
     private function lock(callable|null $callback = null): mixed
     {
-        if (is_null($callback))
-        {
-            return new HigherOrderConcurrentLockProxy($this, fn (callable $callback) => $this->lock($callback));
+        if (is_null($callback)) {
+            return new HigherOrderConcurrentLockProxy($this, fn(callable $callback) => $this->lock($callback));
         }
 
-        if ($this->isLocked)
-        {
+        if ($this->isLocked) {
             return $callback();
         }
 
         $lock = Cache::lock("$this->key:lock", self::LOCK_DURATION);
 
-        try
-        {
+        try {
             $this->isLocked = true;
             $lock->block(self::LOCK_DURATION / 2);
 
             return $callback();
-        }
-        finally
-        {
+        } finally {
             $lock->release();
             $this->isLocked = false;
         }
@@ -122,27 +118,24 @@ class Concurrent implements ArrayAccess, IteratorAggregate
      * When setting a value, if the value is a callable, it will be executed with the current cached value
      * as an argument, and the result of that callable will be used as the new cached value.
      *
-     * @param  TValue|callable(TValue): TValue|null  $value
-     * @param  bool  $read  Whether to read the cached value using the provided callable
+     * @param TValue|callable(TValue): TValue|null $value
+     * @param bool $read Whether to read the cached value using the provided callable
      * @return TValue|void
      */
     public function __invoke(mixed $value = null, bool $read = false)
     {
         // -- Get cached value --
-        if (func_num_args() === 0)
-        {
+        if (func_num_args() === 0) {
             return $this->lock()->get();
         }
 
         // -- Read cached value --
-        if ($read)
-        {
-            return $this->lock(fn () => $value($this->get()));
+        if ($read) {
+            return $this->lock(fn() => $value($this->get()));
         }
 
         // -- Forget cached value --
-        if (is_null($value))
-        {
+        if (is_null($value)) {
             $this->lock()->forget();
 
             return;
@@ -156,8 +149,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
     public function __call(string $name, array $arguments)
     {
-        if ($this->isReadOnlyMethod($name))
-        {
+        if ($this->isReadOnlyMethod($name)) {
             return $this->readOnly($name, $arguments);
         }
 
@@ -213,8 +205,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         return $this->lock(function () {
             $value = $this->get();
 
-            return match (true)
-            {
+            return match (true) {
                 $value instanceof Traversable => $value,
                 is_array($value) => new ArrayIterator($value),
                 default => throw new InvalidArgumentException('Cached value is not iterable.'),
@@ -226,8 +217,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
     protected function repository(): Repository
     {
-        if ($this->tags)
-        {
+        if ($this->tags) {
             return Cache::tags($this->tags);
         }
 
@@ -236,10 +226,9 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
     private function get(): mixed
     {
-        $value = $this->repository()->get($this->key, fn () => $this->resolveDefaultValue());
+        $value = $this->repository()->get($this->key, fn() => $this->resolveDefaultValue());
 
-        if ($this->validator->invalid($value))
-        {
+        if ($this->validator->invalid($value)) {
             $value = $this->resolveDefaultValue();
             $this->forget();
         }
@@ -251,8 +240,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     {
         $target = $this->get();
 
-        return match (true)
-        {
+        return match (true) {
             is_array($target) => $target[$key] ?? null,
             is_object($target) => $target->{$key} ?? null,
             default => null,
@@ -261,13 +249,11 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
     private function set(mixed $value = null): void
     {
-        if (is_callable($value) && ! is_string($value))
-        {
+        if (is_callable($value) && !is_string($value)) {
             $value = $value($this->get());
         }
 
-        if ($this->validator->invalid($value))
-        {
+        if ($this->validator->invalid($value)) {
             throw new InvalidArgumentException('Invalid value provided for ConcurrentValue.');
         }
 
@@ -278,19 +264,13 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     {
         $target = $this->get();
 
-        if (is_array($target))
-        {
-            if (is_null($key))
-            {
+        if (is_array($target)) {
+            if (is_null($key)) {
                 $target[] = $value;
-            }
-            else
-            {
+            } else {
                 $target[$key] = $value;
             }
-        }
-        elseif (is_object($target))
-        {
+        } elseif (is_object($target)) {
             $target->{$key} = $value;
         }
 
@@ -322,12 +302,9 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     {
         $target = $this->get();
 
-        if (is_array($target))
-        {
+        if (is_array($target)) {
             unset($target[$property]);
-        }
-        elseif (is_object($target))
-        {
+        } elseif (is_object($target)) {
             unset($target->{$property});
         }
 
@@ -338,8 +315,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     {
         $target = $this->get();
 
-        return match (true)
-        {
+        return match (true) {
             is_array($target) => isset($target[$property]),
             is_object($target) => isset($target->{$property}),
             default => false,
@@ -357,13 +333,16 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     }
 
     /**
-     * Check if the method is declared as read-only by the cached value.
+     * Check if the method is declared as read-only by the cached value or the wrapper itself.
      */
     private function isReadOnlyMethod(string $name): bool
     {
-        $target = $this->get();
+        foreach ([$this, $this->get()] as $source) {
+            if ($source instanceof DeclaresReadOnlyMethods && in_array($name, $source::readOnlyMethods(), true)) {
+                return true;
+            }
+        }
 
-        return $target instanceof DeclaresReadOnlyMethods
-            && in_array($name, $target::readOnlyMethods(), true);
+        return false;
     }
 }
