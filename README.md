@@ -373,6 +373,8 @@ class RateLimiter
 
 The key `"RateLimiter:attempts"` is deterministic — any instance of `RateLimiter` shares the same cache entry. This works with all `Concurrent` subclasses, including the built-in data structures.
 
+**Important:** Auto-key resolution only works inside a class constructor. Creating a `Concurrent` without a key in a regular method or at the top level will throw a `RuntimeException`.
+
 ## Extending Concurrent
 
 You can extend `Concurrent` directly to encapsulate the default value, TTL, and domain-specific methods. You can also add your own methods that operate on the wrapped value — invoking with a callback for atomic multi-field updates, or property proxying for simple writes:
