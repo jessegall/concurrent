@@ -6,9 +6,9 @@ namespace JesseGall\Concurrent;
  * A thread-safe hash map backed by cache.
  *
  * Multiple processes can safely read and write to the same map
- * without race conditions — like Java's ConcurrentHashMap or Go's sync.Map.
+ * without race conditions — like Java's ConcurrentMap or Go's sync.Map.
  */
-class ConcurrentHashMap extends Concurrent
+class ConcurrentMap extends Concurrent
 {
     public function __construct(string|null $key = null, int $ttl = 3600)
     {

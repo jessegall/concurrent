@@ -3,7 +3,6 @@
 namespace JesseGall\Concurrent\Tests;
 
 use JesseGall\Concurrent\Concurrent;
-use JesseGall\Concurrent\ConcurrentClassMember;
 use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
 
 class ConcurrentTest extends TestCase
@@ -668,7 +667,7 @@ class TestCsvProcessingSession extends Concurrent implements DeclaresReadOnlyMet
     }
 }
 
-class TestConcurrentHashMap extends ConcurrentClassMember
+class TestConcurrentMap extends Concurrent
 {
     public function __construct()
     {
@@ -709,11 +708,11 @@ class TestConcurrentHashMap extends ConcurrentClassMember
 
 class TestRateLimiter
 {
-    private TestConcurrentHashMap $attempts;
+    private TestConcurrentMap $attempts;
 
     public function __construct()
     {
-        $this->attempts = new TestConcurrentHashMap();
+        $this->attempts = new TestConcurrentMap();
     }
 
     public function hit(string $ip): void

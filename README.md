@@ -2,7 +2,7 @@
 
 Thread-safe shared state for Laravel. Wrap any value — objects, arrays, scalars — in a concurrent proxy that handles locking, caching, and persistence across processes automatically.
 
-Ships with ready-to-use data structures: `ConcurrentHashMap`, `ConcurrentSet`, `ConcurrentCounter`, and `ConcurrentQueue`.
+Ships with ready-to-use data structures: `ConcurrentMap`, `ConcurrentSet`, `ConcurrentCounter`, and `ConcurrentQueue`.
 
 ## Why?
 
@@ -41,27 +41,27 @@ The package ships with thread-safe versions of common data structures. Each is b
 
 Every built-in type accepts an optional `key`. When provided, it's used as the cache key. When omitted, the key is [auto-generated](#auto-key-resolution) from the owning class and property name.
 
-### ConcurrentHashMap
+### ConcurrentMap
 
-A key-value map — like Java's `ConcurrentHashMap` or Go's `sync.Map`.
+A key-value map — like Java's `ConcurrentMap` or Go's `sync.Map`.
 
 ```php
-use JesseGall\Concurrent\ConcurrentHashMap;
+use JesseGall\Concurrent\ConcurrentMap;
 
 class FeatureManager
 {
-    private ConcurrentHashMap $flags; // auto-key: "FeatureManager:flags"
+    private ConcurrentMap $flags; // auto-key: "FeatureManager:flags"
 
     public function __construct()
     {
-        $this->flags = new ConcurrentHashMap;
+        $this->flags = new ConcurrentMap;
     }
 
     // ...
 }
 
 // Or with an explicit key — works anywhere:
-$map = new ConcurrentHashMap('app:settings');
+$map = new ConcurrentMap('app:settings');
 
 $map->set('dark-mode', true);
 $map->get('dark-mode');          // true
@@ -396,16 +396,16 @@ The queue job and the controller create their own `CsvProcessingSession` instanc
 When no key is provided, `Concurrent` automatically generates a cache key from the owning class and property name. This is useful when you want concurrent class properties without manually coordinating keys:
 
 ```php
-use JesseGall\Concurrent\ConcurrentHashMap;
+use JesseGall\Concurrent\ConcurrentMap;
 
 class RateLimiter
 {
     // Key is auto-generated: "RateLimiter:attempts"
-    private ConcurrentHashMap $attempts;
+    private ConcurrentMap $attempts;
 
     public function __construct()
     {
-        $this->attempts = new ConcurrentHashMap();
+        $this->attempts = new ConcurrentMap();
     }
 
     public function hit(string $ip): void
