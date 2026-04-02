@@ -16,6 +16,7 @@ class ConcurrentCounter extends Concurrent
             key: $key,
             default: 0,
             ttl: $ttl,
+            validator: fn ($v) => is_int($v),
         );
     }
 

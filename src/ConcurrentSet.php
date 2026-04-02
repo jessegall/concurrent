@@ -16,6 +16,7 @@ class ConcurrentSet extends Concurrent
             key: $key,
             default: fn () => [],
             ttl: $ttl,
+            validator: fn ($v) => is_array($v),
         );
     }
 
