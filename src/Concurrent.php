@@ -172,9 +172,9 @@ class Concurrent implements ArrayAccess, IteratorAggregate
             return $this->lock()->get();
         }
 
-        // -- Read cached value --
+        // -- Read cached value (no lock) --
         if ($read) {
-            return $this->lock(fn() => $value($this->get()));
+            return $value($this->get());
         }
 
         // -- Forget cached value --
@@ -193,7 +193,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     public function __call(string $name, array $arguments)
     {
         if ($this->isReadOnlyMethod($name)) {
-            return $this->readOnly($name, $arguments);
+            return $this(fn ($target) => $this->forwardDecoratedCallTo($target, $name, $arguments), read: true);
         }
 
         return $this->lock()->call($name, $arguments);
@@ -363,16 +363,6 @@ class Concurrent implements ArrayAccess, IteratorAggregate
             is_object($target) => isset($target->{$property}),
             default => false,
         };
-    }
-
-    /**
-     * Call a read-only method without locking or writing back.
-     */
-    private function readOnly(string $name, array $arguments): mixed
-    {
-        $target = $this->get();
-
-        return $this->forwardDecoratedCallTo($target, $name, $arguments);
     }
 
     /**
