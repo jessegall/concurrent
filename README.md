@@ -322,27 +322,79 @@ The generated key is deterministic — any instance of `ProductImporter` will us
 
 ## Extending Concurrent
 
-Instead of wrapping a plain object, you can extend `Concurrent` or `ConcurrentClassMember` directly. This lets you encapsulate the default value and TTL inside the class itself — callers just provide the key:
+Instead of wrapping a plain object, you can extend `Concurrent` or `ConcurrentClassMember` directly. This lets you encapsulate the default value, TTL, and domain-specific methods inside the class itself. You can also add your own methods that operate on the wrapped value — using `__invoke` for atomic multi-field updates, or property proxying for simple writes:
 
 ```php
 use JesseGall\Concurrent\Concurrent;
 
+class ImportProgressData
+{
+    public int $imported = 0;
+    public int $total = 0;
+    public string $status = 'pending';
+
+    public function percentage(): int
+    {
+        return $this->total > 0
+            ? (int) round(($this->imported / $this->total) * 100)
+            : 0;
+    }
+}
+
+/**
+ * @mixin ImportProgressData
+ */
 class ImportProgress extends Concurrent
 {
     public function __construct(string $shopId)
     {
         parent::__construct(
             key: "import-progress:{$shopId}",
-            default: fn () => ['imported' => 0, 'total' => 0, 'status' => 'pending'],
+            default: fn () => new ImportProgressData(),
             ttl: 300,
         );
     }
+
+    // Use __invoke for atomic updates that touch multiple fields
+    public function start(int $total): void
+    {
+        $this(function (ImportProgressData $data) use ($total) {
+            $data->total = $total;
+            $data->status = 'processing';
+
+            return $data;
+        });
+    }
+
+    // Use __invoke for read-modify-write on a single field
+    public function advance(): void
+    {
+        $this(function (ImportProgressData $data) {
+            $data->imported++;
+
+            return $data;
+        });
+    }
+
+    // Simple property writes work through the proxy too
+    public function complete(): void
+    {
+        $this->status = 'completed';
+    }
 }
 
-// Clean, no configuration needed at the call site
+// Clean — no configuration needed at the call site
 $progress = new ImportProgress($shopId);
-$progress['total'] = 500;
-$progress['imported']++;
+
+$progress->start(10);
+$progress->advance();
+
+// Methods on the wrapped object are proxied through __call
+echo $progress->percentage(); // 10
+echo $progress->imported;     // 1
+
+$progress->complete();
+echo $progress->status;       // "completed"
 ```
 
 The same works with `ConcurrentClassMember` — extend it to bake in the defaults, and the key is still auto-generated from the owning class and property:
@@ -355,7 +407,7 @@ class Progress extends ConcurrentClassMember
     public function __construct()
     {
         parent::__construct(
-            default: fn () => ['imported' => 0, 'total' => 0],
+            default: fn () => new ImportProgressData(),
             ttl: 300,
         );
     }
@@ -372,7 +424,7 @@ class ProductImporter
 }
 ```
 
-This way the `default` and `ttl` live with the class definition, not scattered across every place that creates an instance.
+This way the `default`, `ttl`, and domain methods live with the class definition, not scattered across every place that creates an instance.
 
 ## Validation
 
@@ -428,7 +480,7 @@ This ensures that concurrent processes never overwrite each other's changes. The
 ## Requirements
 
 - PHP 8.2+
-- Laravel 10, 11, or 12
+- Laravel 10, 11, 12, or 13
 - A cache driver that supports locking (Redis recommended)
 
 ## License
