@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Traits\ForwardsCalls;
 use InvalidArgumentException;
 use IteratorAggregate;
+use ReflectionClass;
+use RuntimeException;
 use Traversable;
 
 /**
@@ -38,7 +40,37 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
     protected const int LOCK_DURATION = 10; // seconds
 
+    protected const int MAX_BACKTRACE_DEPTH = 10;
+
     private bool $isLocked = false;
+
+    /**
+     * The source object for auto-key resolution (when no key is provided).
+     */
+    private mixed $source = null;
+
+    /**
+     * Whether the key has been resolved.
+     */
+    private bool $keyResolved = false;
+
+    /**
+     * The cache key. When provided in the constructor, used as-is.
+     * When null, auto-generated from the owning class and property name.
+     */
+    public protected(set) string $key {
+        get {
+            if ($this->keyResolved)
+            {
+                return $this->key;
+            }
+
+            $key = $this->resolveKeyFromSourceProperty();
+            $this->keyResolved = true;
+
+            return $this->key = $key;
+        }
+    }
 
     /**
      * The cached value.
@@ -55,10 +87,11 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     protected readonly ConcurrentValueValidator $validator;
 
     /**
-     * @param string|array<string>|null $tags
+     * @param  string|null  $key  Explicit cache key. When null, auto-generated from the owning class and property name.
+     * @param  string|array<string>|null  $tags
      */
     public function __construct(
-        protected(set) string             $key,
+        string|null                       $key = null,
         public readonly mixed             $default = null,
         public readonly int               $ttl = 300,
         callable|null                     $validator = null,
@@ -66,6 +99,16 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     )
     {
         $this->validator = new ConcurrentValueValidator($validator);
+
+        if ($key !== null)
+        {
+            $this->key = $key;
+            $this->keyResolved = true;
+        }
+        else
+        {
+            $this->source = $this->resolveSource();
+        }
     }
 
     // ----------[ ConcurrentValue ]----------
@@ -346,4 +389,59 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         return false;
     }
 
+    // ----------[ Auto-Key Resolution ]----------
+
+    /**
+     * Resolve the source object that owns this instance as a property.
+     *
+     * @throws RuntimeException
+     */
+    private function resolveSource(): mixed
+    {
+        $source = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT, self::MAX_BACKTRACE_DEPTH);
+
+        foreach ($source as $item)
+        {
+            $object = $item['object'] ?? null;
+
+            if ($object && $object !== $this)
+            {
+                return $object;
+            }
+        }
+
+        throw new RuntimeException('Unable to resolve source object. Provide an explicit key or use as a class property.');
+    }
+
+    /**
+     * Generate a cache key from the owning class name and property name.
+     *
+     * @throws RuntimeException
+     */
+    private function resolveKeyFromSourceProperty(): string
+    {
+        $reflector = new ReflectionClass($this->source);
+
+        foreach ($reflector->getProperties() as $property)
+        {
+            if ($property->isStatic())
+            {
+                continue;
+            }
+
+            if (! $property->isInitialized($this->source))
+            {
+                continue;
+            }
+
+            $value = $property->getValue($this->source);
+
+            if ($value === $this)
+            {
+                return "{$reflector->getName()}:{$property->getName()}";
+            }
+        }
+
+        throw new RuntimeException('Unable to determine cache key from source properties.');
+    }
 }

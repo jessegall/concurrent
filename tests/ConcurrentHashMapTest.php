@@ -4,6 +4,16 @@ namespace JesseGall\Concurrent\Tests;
 
 use JesseGall\Concurrent\ConcurrentHashMap;
 
+class TestHashMapOwner
+{
+    public ConcurrentHashMap $settings;
+
+    public function __construct()
+    {
+        $this->settings = new ConcurrentHashMap();
+    }
+}
+
 class ConcurrentHashMapTest extends TestCase
 {
     public function test_set_and_get(): void
@@ -84,6 +94,19 @@ class ConcurrentHashMapTest extends TestCase
 
         $this->assertSame('from-a', $a->get('key'));
         $this->assertSame('from-b', $b->get('key'));
+    }
+
+    public function test_auto_key_as_class_property(): void
+    {
+        $owner = new TestHashMapOwner;
+
+        $owner->settings->set('theme', 'dark');
+
+        $this->assertSame('dark', $owner->settings->get('theme'));
+
+        // New instance shares the same auto-generated key
+        $another = new TestHashMapOwner;
+        $this->assertSame('dark', $another->settings->get('theme'));
     }
 
     public function test_remove_nonexistent_key_does_not_error(): void

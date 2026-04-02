@@ -10,7 +10,7 @@ namespace JesseGall\Concurrent;
  */
 class ConcurrentCounter extends Concurrent
 {
-    public function __construct(string $key, int $ttl = 3600)
+    public function __construct(string|null $key = null, int $ttl = 3600)
     {
         parent::__construct(
             key: $key,

@@ -91,4 +91,23 @@ class ConcurrentSetTest extends TestCase
         $second = new ConcurrentSet('test:set-persist');
         $this->assertTrue($second->contains('shared'));
     }
+
+    public function test_auto_key_as_class_property(): void
+    {
+        $owner = new TestSetOwner;
+        $owner->tags->add('php');
+
+        $another = new TestSetOwner;
+        $this->assertTrue($another->tags->contains('php'));
+    }
+}
+
+class TestSetOwner
+{
+    public ConcurrentSet $tags;
+
+    public function __construct()
+    {
+        $this->tags = new ConcurrentSet;
+    }
 }

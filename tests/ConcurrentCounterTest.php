@@ -82,4 +82,23 @@ class ConcurrentCounterTest extends TestCase
         $second = new ConcurrentCounter('test:counter-persist');
         $this->assertSame(7, $second->count());
     }
+
+    public function test_auto_key_as_class_property(): void
+    {
+        $owner = new TestCounterOwner;
+        $owner->hits->increment(3);
+
+        $another = new TestCounterOwner;
+        $this->assertSame(3, $another->hits->count());
+    }
+}
+
+class TestCounterOwner
+{
+    public ConcurrentCounter $hits;
+
+    public function __construct()
+    {
+        $this->hits = new ConcurrentCounter;
+    }
 }

@@ -20,7 +20,7 @@ When multiple processes (web requests, queue workers, cron jobs) need to share s
 - [Built-in Data Structures](#built-in-data-structures)
 - [Quick Start](#quick-start)
 - [Building a Custom Concurrent Class](#building-a-custom-concurrent-class)
-- [ConcurrentClassMember](#concurrentclassmember)
+- [Auto-Key Resolution](#auto-key-resolution)
 - [Extending Concurrent](#extending-concurrent)
 - [ConcurrentApi Trait](#concurrentapi-trait)
 - [How It Works](#how-it-works)
@@ -39,6 +39,8 @@ composer require jessegall/concurrent
 
 The package ships with thread-safe versions of common data structures. Each is backed by cache and safe to use across processes.
 
+Every built-in type accepts an optional `key`. When provided, it's used as the cache key. When omitted, the key is [auto-generated](#auto-key-resolution) from the owning class and property name.
+
 ### ConcurrentHashMap
 
 A key-value map — like Java's `ConcurrentHashMap` or Go's `sync.Map`.
@@ -46,7 +48,7 @@ A key-value map — like Java's `ConcurrentHashMap` or Go's `sync.Map`.
 ```php
 use JesseGall\Concurrent\ConcurrentHashMap;
 
-$settings = new ConcurrentHashMap('app:feature-flags');
+$settings = new ConcurrentHashMap;
 
 $settings->set('dark-mode', true);
 $settings->set('beta-search', false);
@@ -65,7 +67,7 @@ A collection of unique values — duplicates are ignored.
 ```php
 use JesseGall\Concurrent\ConcurrentSet;
 
-$online = new ConcurrentSet('users:online');
+$online = new ConcurrentSet;
 
 $online->add('alice');
 $online->add('bob');
@@ -85,7 +87,7 @@ An atomic counter — safe increment/decrement across processes.
 ```php
 use JesseGall\Concurrent\ConcurrentCounter;
 
-$visitors = new ConcurrentCounter('stats:visitors');
+$visitors = new ConcurrentCounter;
 
 $visitors->increment();
 $visitors->increment(5);
@@ -101,7 +103,7 @@ A FIFO queue — push from one process, pop from another.
 ```php
 use JesseGall\Concurrent\ConcurrentQueue;
 
-$events = new ConcurrentQueue('app:event-buffer');
+$events = new ConcurrentQueue;
 
 $events->push(['type' => 'order.created', 'id' => 42]);
 $events->push(['type' => 'user.registered', 'id' => 7]);
@@ -340,53 +342,12 @@ class CsvUploadController
 
 The queue job and the controller create their own `CsvProcessingSession` instances — but since they use the same upload ID, they share the same cache key and therefore the same state. Writer methods lock and persist; reader methods just read — no overhead.
 
-## ConcurrentClassMember
+## Auto-Key Resolution
 
-If you want to easily have concurrent properties on a class, use `ConcurrentClassMember`. It automatically generates the cache key from the owning class and property name — no manual key coordination needed.
-
-Any instance of the same class will share the same cached value for that property, across processes.
+When no key is provided, `Concurrent` automatically generates a cache key from the owning class and property name. This is useful when you want concurrent class properties without manually coordinating keys:
 
 ```php
-use JesseGall\Concurrent\ConcurrentClassMember;
-
-class ConcurrentHashMap extends ConcurrentClassMember
-{
-    public function __construct()
-    {
-        parent::__construct(
-            default: fn () => [],
-            ttl: 3600,
-        );
-    }
-
-    public function get(string $key, mixed $default = null): mixed
-    {
-        return $this[$key] ?? $default;
-    }
-
-    public function set(string $key, mixed $value): void
-    {
-        $this(function (array $map) use ($key, $value) {
-            $map[$key] = $value;
-
-            return $map;
-        });
-    }
-
-    public function remove(string $key): void
-    {
-        $this(function (array $map) use ($key) {
-            unset($map[$key]);
-
-            return $map;
-        });
-    }
-
-    public function has(string $key): bool
-    {
-        return isset($this[$key]);
-    }
-}
+use JesseGall\Concurrent\ConcurrentHashMap;
 
 class RateLimiter
 {
@@ -407,19 +368,14 @@ class RateLimiter
     {
         return $this->attempts->get($ip, 0) >= 10;
     }
-
-    public function reset(string $ip): void
-    {
-        $this->attempts->remove($ip);
-    }
 }
 ```
 
-The key `"RateLimiter:attempts"` is deterministic — a web request incrementing attempts and a cleanup job resetting them will share the same cache entry automatically.
+The key `"RateLimiter:attempts"` is deterministic — any instance of `RateLimiter` shares the same cache entry. This works with all `Concurrent` subclasses, including the built-in data structures.
 
 ## Extending Concurrent
 
-Instead of wrapping a plain object, you can extend `Concurrent` or `ConcurrentClassMember` directly. This lets you encapsulate the default value, TTL, and domain-specific methods inside the class itself. You can also add your own methods that operate on the wrapped value — invoking with a callback for atomic multi-field updates, or property proxying for simple writes:
+You can extend `Concurrent` directly to encapsulate the default value, TTL, and domain-specific methods. You can also add your own methods that operate on the wrapped value — invoking with a callback for atomic multi-field updates, or property proxying for simple writes:
 
 ```php
 use JesseGall\Concurrent\Concurrent;
@@ -491,34 +447,7 @@ $progress->complete();
 echo $progress->status;       // "completed"
 ```
 
-The same works with `ConcurrentClassMember` — extend it to bake in the defaults, and the key is still auto-generated from the owning class and property:
-
-```php
-use JesseGall\Concurrent\ConcurrentClassMember;
-
-class Progress extends ConcurrentClassMember
-{
-    public function __construct()
-    {
-        parent::__construct(
-            default: fn () => new ImportProgressData(),
-            ttl: 300,
-        );
-    }
-}
-
-class ProductImporter
-{
-    private Progress $progress; // key: "ProductImporter:progress"
-
-    public function __construct()
-    {
-        $this->progress = new Progress();
-    }
-}
-```
-
-This way the `default`, `ttl`, and domain methods live with the class definition, not scattered across every place that creates an instance.
+When used as a class property without a key, the cache key is auto-generated (see [Auto-Key Resolution](#auto-key-resolution)). This way the `default`, `ttl`, and domain methods live with the class definition, not scattered across every place that creates an instance.
 
 ## Read-Only Methods
 

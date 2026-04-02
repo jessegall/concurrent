@@ -120,4 +120,23 @@ class ConcurrentQueueTest extends TestCase
         $this->assertSame(42, $queue->pop());
         $this->assertSame(['key' => 'value'], $queue->pop());
     }
+
+    public function test_auto_key_as_class_property(): void
+    {
+        $owner = new TestQueueOwner;
+        $owner->events->push('event-1');
+
+        $another = new TestQueueOwner;
+        $this->assertSame('event-1', $another->events->pop());
+    }
+}
+
+class TestQueueOwner
+{
+    public ConcurrentQueue $events;
+
+    public function __construct()
+    {
+        $this->events = new ConcurrentQueue;
+    }
 }
