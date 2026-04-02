@@ -1,6 +1,8 @@
 # Concurrent
 
-A thread-safe wrapper for cached values in Laravel. Work with shared state across processes as if it were a local object — with automatic locking, validation, and cache persistence.
+Thread-safe shared state for Laravel. Wrap any value — objects, arrays, scalars — in a concurrent proxy that handles locking, caching, and persistence across processes automatically.
+
+Ships with ready-to-use data structures: `ConcurrentHashMap`, `ConcurrentSet`, `ConcurrentCounter`, and `ConcurrentQueue`.
 
 ## Why?
 
@@ -10,7 +12,22 @@ When multiple processes (web requests, queue workers, cron jobs) need to share s
 - No locking — race conditions on read-modify-write
 - Business logic mixed with cache mechanics
 
-**Concurrent** wraps any value in a thread-safe proxy. You interact with the object normally — method calls, property access, array operations — and the wrapper handles locking, serialization, and persistence automatically.
+**Concurrent** solves this. Wrap any value in a thread-safe proxy and interact with it normally — method calls, property access, array operations — the wrapper handles the rest. Or use the built-in data structures that work out of the box.
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Built-in Data Structures](#built-in-data-structures)
+- [Real-World Example: CSV Processing](#real-world-example-csv-processing-with-live-progress)
+- [ConcurrentClassMember](#concurrentclassmember)
+- [Extending Concurrent](#extending-concurrent)
+- [ConcurrentApi Trait](#concurrentapi-trait)
+- [How It Works](#how-it-works)
+- [Read-Only Methods](#read-only-methods)
+- [Validation](#validation)
+- [Caveats](#caveats)
+- [Requirements](#requirements)
 
 ## Installation
 
@@ -245,59 +262,82 @@ class CsvUploadController
 
 The queue job and the controller create their own `CsvProcessingSession` instances — but since they use the same upload ID, they share the same cache key and therefore the same state. Writer methods lock and persist; reader methods just read — no overhead.
 
-## Real-World Example: ConcurrentHashMap
+## Built-in Data Structures
 
-PHP doesn't have a built-in thread-safe hash map (like Java's `ConcurrentHashMap` or Go's `sync.Map`). This package ships with one out of the box — `ConcurrentHashMap`:
+The package ships with thread-safe versions of common data structures. Each is backed by cache and safe to use across processes.
 
-Multiple processes can safely read and write to the same map without race conditions:
+### ConcurrentHashMap
+
+A key-value map — like Java's `ConcurrentHashMap` or Go's `sync.Map`.
 
 ```php
 use JesseGall\Concurrent\ConcurrentHashMap;
 
 $settings = new ConcurrentHashMap('app:feature-flags');
 
-// Process A (deploy script):
 $settings->set('dark-mode', true);
 $settings->set('beta-search', false);
 
-// Process B (web request):
-if ($settings->get('dark-mode')) {
-    // feature is enabled
-}
-
-// Process C (admin panel):
+$settings->get('dark-mode');          // true
+$settings->get('missing', 'default'); // "default"
+$settings->has('dark-mode');          // true
 $settings->remove('beta-search');
-$settings->has('beta-search'); // false
+$settings->all();                     // ['dark-mode' => true]
 ```
 
-## Read-Only Methods
+### ConcurrentSet
 
-By default, every method call on a wrapped object acquires a lock, reads the value from cache, executes the method, writes the modified value back, and releases the lock. For methods that only read state, this is unnecessary overhead.
-
-Implement `DeclaresReadOnlyMethods` to mark methods that should skip the lock and write-back:
+A collection of unique values — duplicates are ignored.
 
 ```php
-use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
+use JesseGall\Concurrent\ConcurrentSet;
 
-class Counter implements DeclaresReadOnlyMethods
-{
-    public int $count = 0;
+$online = new ConcurrentSet('users:online');
 
-    public static function readOnlyMethods(): array
-    {
-        return ['getCount']; // skips lock + write-back
-    }
+$online->add('alice');
+$online->add('bob');
+$online->add('alice');    // ignored — already in set
 
-    public function increment(): void   // locks, reads, increments, writes
-    {
-        $this->count++;
-    }
+$online->contains('alice'); // true
+$online->count();           // 2
+$online->all();             // ['alice', 'bob']
+$online->remove('bob');
+$online->clear();
+```
 
-    public function getCount(): int     // just reads from cache
-    {
-        return $this->count;
-    }
-}
+### ConcurrentCounter
+
+An atomic counter — safe increment/decrement across processes.
+
+```php
+use JesseGall\Concurrent\ConcurrentCounter;
+
+$visitors = new ConcurrentCounter('stats:visitors');
+
+$visitors->increment();
+$visitors->increment(5);
+$visitors->decrement();
+$visitors->count();    // 5
+$visitors->reset();
+```
+
+### ConcurrentQueue
+
+A FIFO queue — push from one process, pop from another.
+
+```php
+use JesseGall\Concurrent\ConcurrentQueue;
+
+$events = new ConcurrentQueue('app:event-buffer');
+
+$events->push(['type' => 'order.created', 'id' => 42]);
+$events->push(['type' => 'user.registered', 'id' => 7]);
+
+$events->peek();     // ['type' => 'order.created', 'id' => 42] (doesn't remove)
+$events->pop();      // ['type' => 'order.created', 'id' => 42] (removes)
+$events->size();     // 1
+$events->isEmpty();  // false
+$events->clear();
 ```
 
 ## ConcurrentClassMember
@@ -479,6 +519,36 @@ class ProductImporter
 ```
 
 This way the `default`, `ttl`, and domain methods live with the class definition, not scattered across every place that creates an instance.
+
+## Read-Only Methods
+
+By default, every method call on a wrapped object acquires a lock, reads the value from cache, executes the method, writes the modified value back, and releases the lock. For methods that only read state, this is unnecessary overhead.
+
+Implement `DeclaresReadOnlyMethods` to mark methods that should skip the lock and write-back:
+
+```php
+use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
+
+class Counter implements DeclaresReadOnlyMethods
+{
+    public int $count = 0;
+
+    public static function readOnlyMethods(): array
+    {
+        return ['getCount']; // skips lock + write-back
+    }
+
+    public function increment(): void   // locks, reads, increments, writes
+    {
+        $this->count++;
+    }
+
+    public function getCount(): int     // just reads from cache
+    {
+        return $this->count;
+    }
+}
+```
 
 ## Validation
 
