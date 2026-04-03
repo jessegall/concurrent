@@ -29,23 +29,29 @@ class HigherOrderConcurrentChainProxy
     }
 
     /**
-     * Execute all queued calls inside a single lock.
+     * Execute all queued calls inside a single lock and return the resulting value.
      */
-    private function flush(): void
+    public function flush(): mixed
     {
         if (empty($this->calls))
         {
-            return;
+            return ($this->target)();
         }
 
         $calls = $this->calls;
         $this->calls = [];
 
-        ($this->target)(function (Concurrent $target) use ($calls) {
+        $result = null;
+
+        ($this->target)(function (Concurrent $target) use ($calls, &$result) {
             foreach ($calls as [$method, $arguments])
             {
                 $target->{$method}(...$arguments);
             }
+
+            $result = $target();
         }, lock: true);
+
+        return $result;
     }
 }

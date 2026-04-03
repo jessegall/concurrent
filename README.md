@@ -145,6 +145,12 @@ $list->chain()
      ->map(fn (float $price) => $price * 1.1)
      ->filter(fn (float $price) => $price > 15.00)
      ->each(fn (float $price) => log($price));
+
+// Flush — execute chain and return the value
+$prices = $list->chain()
+     ->map(fn (float $price) => $price * 1.1)
+     ->filter(fn (float $price) => $price > 15.00)
+     ->flush();
 ```
 
 ### Wrapping any value
