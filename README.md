@@ -228,10 +228,10 @@ class ProcessingSession extends Concurrent implements DeclaresReadOnlyMethods
         });
     }
 
-    // Property proxy — simple increment
+    // Invoke with & — atomic increment
     public function advance(): void
     {
-        $this->processed++;
+        $this(fn (&$data) => $data->processed++);
     }
 
     // Reference — array append
