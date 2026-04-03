@@ -51,31 +51,91 @@ class ConcurrentTest extends TestCase
         $this->assertSame(15, $concurrent());
     }
 
-    public function test_reads_value_with_callback(): void
+    public function test_sets_value_with_reference_callable(): void
     {
-        $concurrent = new Concurrent('test:read', default: 0, ttl: 60);
+        $concurrent = new Concurrent('test:ref-set', default: 10, ttl: 60);
 
-        $concurrent(42);
+        $concurrent(10);
+        $concurrent(function (&$current) {
+            $current += 5;
+        });
 
-        $result = $concurrent(fn ($value) => $value * 2, read: true);
-        $this->assertSame(84, $result);
-
-        // Original value unchanged
-        $this->assertSame(42, $concurrent());
+        $this->assertSame(15, $concurrent());
     }
 
-    public function test_read_does_not_lock(): void
+    public function test_reference_callable_with_object(): void
     {
-        $concurrent = new Concurrent(key: 'test:read-no-lock', default: 42, ttl: 60);
+        $obj = new class {
+            public int $count = 0;
+        };
+
+        $concurrent = new Concurrent('test:ref-obj', default: fn () => clone $obj, ttl: 60);
+
+        $concurrent(function (&$data) {
+            $data->count = 42;
+        });
+
+        $this->assertSame(42, $concurrent->count);
+    }
+
+    public function test_reference_callable_with_array(): void
+    {
+        $concurrent = new Concurrent('test:ref-array', default: fn () => [], ttl: 60);
+
+        $concurrent(function (&$data) {
+            $data['key'] = 'value';
+            $data['items'][] = 'first';
+        });
+
+        $this->assertSame('value', $concurrent['key']);
+        $this->assertSame(['first'], $concurrent['items']);
+    }
+
+    public function test_reference_callable_with_arrow_function(): void
+    {
+        $concurrent = new Concurrent('test:ref-arrow', default: 10, ttl: 60);
+
+        $concurrent(10);
+        $concurrent(fn (&$current) => $current += 5);
+
+        $this->assertSame(15, $concurrent());
+    }
+
+    public function test_reference_arrow_function_array_append_on_object(): void
+    {
+        $obj = new class {
+            public array $items = [];
+        };
+
+        $concurrent = new Concurrent('test:ref-arrow-append-obj', default: fn () => clone $obj, ttl: 60);
+
+        $concurrent(fn (&$data) => $data->items[] = 'first');
+        $concurrent(fn (&$data) => $data->items[] = 'second');
+
+        $this->assertSame(['first', 'second'], $concurrent->items);
+    }
+
+    public function test_reference_arrow_function_array_append_on_array(): void
+    {
+        $concurrent = new Concurrent('test:ref-arrow-append-arr', default: fn () => [], ttl: 60);
+
+        $concurrent(fn (&$data) => $data[] = 'first');
+        $concurrent(fn (&$data) => $data[] = 'second');
+
+        $this->assertSame(['first', 'second'], $concurrent());
+    }
+
+    public function test_get_does_not_lock(): void
+    {
+        $concurrent = new Concurrent(key: 'test:get-no-lock', default: 42, ttl: 60);
         $concurrent(42);
 
-        // Acquire the lock externally — simulates another process holding it
-        $lock = \Illuminate\Support\Facades\Cache::lock('test:read-no-lock:lock', 10);
+        // Acquire the lock externally
+        $lock = \Illuminate\Support\Facades\Cache::lock('test:get-no-lock:lock', 10);
         $lock->get();
 
-        // Read should still work even though the lock is held
-        $result = $concurrent(fn ($value) => $value * 2, read: true);
-        $this->assertSame(84, $result);
+        // Get should still work even though the lock is held
+        $this->assertSame(42, $concurrent());
 
         $lock->release();
     }
@@ -293,39 +353,6 @@ class ConcurrentTest extends TestCase
         $this->assertSame(20, $b());
     }
 
-    public function test_concurrent_api_trait_methods(): void
-    {
-        $store = new TestConcurrentWithApi('test:api', default: fn () => [], ttl: 60);
-
-        $store->set(['a', 'b']);
-        $this->assertSame(['a', 'b'], $store->get());
-
-        $store->update(function (&$v) {
-            $v[] = 'c';
-        });
-        $this->assertSame(['a', 'b', 'c'], $store->get());
-
-        $pulled = $store->pull();
-        $this->assertSame(['a', 'b', 'c'], $pulled);
-        $this->assertSame([], $store->get()); // back to default
-
-        $store->set(['x']);
-        $store->forget();
-        $this->assertSame([], $store->get()); // back to default
-    }
-
-    public function test_with_lock_executes_callback_atomically(): void
-    {
-        $store = new TestConcurrentWithApi('test:withlock', default: 0, ttl: 60);
-        $store->set(5);
-
-        $result = $store->withLock(fn ($v) => $v * 3);
-        $this->assertSame(15, $result);
-
-        // Value unchanged — withLock is read-only
-        $this->assertSame(5, $store->get());
-    }
-
     public function test_throws_when_no_key_and_not_in_constructor(): void
     {
         $this->expectException(\RuntimeException::class);
@@ -530,11 +557,6 @@ class ConcurrentTest extends TestCase
 
         $this->assertSame(0, $limiter->getAttempts('192.168.1.1'));
     }
-}
-
-class TestConcurrentWithApi extends Concurrent
-{
-    use \JesseGall\Concurrent\Concerns\ConcurrentApi;
 }
 
 class TestImportProgressData

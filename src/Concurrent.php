@@ -2,15 +2,13 @@
 
 namespace JesseGall\Concurrent;
 
-use JesseGall\Concurrent\Concerns\ConcurrentApi;
-use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
 use ArrayAccess;
 use ArrayIterator;
-use Illuminate\Contracts\Cache\Repository;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Traits\ForwardsCalls;
 use InvalidArgumentException;
 use IteratorAggregate;
+use JesseGall\Concurrent\Contracts\CacheDriver;
+use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
+use JesseGall\Concurrent\Contracts\LockDriver;
 use ReflectionClass;
 use RuntimeException;
 use Traversable;
@@ -22,41 +20,70 @@ use Traversable;
  * value itself, while automatically handling caching, validation, and locking
  * when accessing or modifying the value.
  *
- * External cache manipulation is handled exclusively through the __invoke() method to avoid
- * potential naming conflicts with methods on the cached value itself.
- *
- * Subclasses can use the `ConcurrentApi` trait to add additional helper methods
- * for getting and setting values.
- *
  * @template TValue
  *
  * @mixin TValue
- *
- * @see ConcurrentApi For additional helper methods
  */
 class Concurrent implements ArrayAccess, IteratorAggregate
 {
-    use ForwardsCalls;
+    /**
+     * Maximum depth for debug_backtrace when resolving the owning class for auto-key generation.
+     */
+    private const int MAX_BACKTRACE_DEPTH = 10;
 
-    protected const int LOCK_DURATION = 10; // seconds
+    /**
+     * The default value returned on cache miss. Can be a callable for lazy resolution.
+     *
+     * @var TValue|callable(): TValue
+     */
+    private readonly mixed $default;
 
-    protected const int MAX_BACKTRACE_DEPTH = 10;
+    /**
+     * Cache TTL in seconds.
+     */
+    private readonly int $ttl;
 
+    /**
+     * Maximum seconds a distributed lock is held before auto-release.
+     * Also used as the timeout when waiting to acquire the lock.
+     */
+    private readonly int $lockDuration;
+
+    /**
+     * Validates values before they are stored. Invalid values on write throw,
+     * invalid values on read fall back to the default.
+     */
+    private readonly ConcurrentValueValidator $validator;
+
+    /**
+     * The cache backend for storing and retrieving values.
+     */
+    private readonly CacheDriver $cacheDriver;
+
+    /**
+     * The distributed lock backend for write synchronization.
+     */
+    private readonly LockDriver $lockDriver;
+
+    /**
+     * Re-entrancy guard — prevents deadlocks when a write triggers another write
+     * on the same instance within the same lock cycle.
+     */
     private bool $isLocked = false;
 
     /**
-     * The source object for auto-key resolution (when no key is provided).
+     * The object that owns this instance as a property, used for auto-key resolution.
      */
     private mixed $source = null;
 
     /**
-     * Whether the key has been resolved.
+     * Whether the cache key has been resolved (lazily generated or explicitly set).
      */
     private bool $keyResolved = false;
 
     /**
-     * The cache key. When provided in the constructor, used as-is.
-     * When null, auto-generated from the owning class and property name.
+     * The cache key. When set in the constructor, used as-is.
+     * When omitted, lazily generated from the owning class and property name.
      */
     private string $key {
         get {
@@ -72,21 +99,30 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         }
     }
 
-    protected readonly ConcurrentValueValidator $validator;
-
     /**
      * @param  string|null  $key  Explicit cache key. When null, auto-generated from the owning class and property name.
-     * @param  string|array<string>|null  $tags
+     * @param  TValue|callable(): TValue  $default  Default value on cache miss. Callables are resolved lazily.
+     * @param  int  $ttl  Cache TTL in seconds.
+     * @param  callable(TValue): bool|null  $validator  Optional validator. Rejects invalid writes (throws) and invalid reads (falls back to default).
+     * @param  Cache|null  $cache  Cache backend. When null, resolved from Laravel's container.
+     * @param  Lock|null  $lock  Lock backend. When null, resolved from Laravel's container.
+     * @param  int  $lockDuration  Maximum seconds a lock is held before auto-release.
      */
     public function __construct(
-        string|null                       $key = null,
-        public readonly mixed             $default = null,
-        public readonly int               $ttl = 300,
-        callable|null                     $validator = null,
-        public readonly string|array|null $tags = null,
-    )
-    {
+        string|null   $key = null,
+        mixed         $default = null,
+        int           $ttl = 300,
+        callable|null $validator = null,
+        CacheDriver|null $cache = null,
+        LockDriver|null  $lock = null,
+        int           $lockDuration = 10,
+    ) {
+        $this->default = $default;
+        $this->ttl = $ttl;
+        $this->lockDuration = $lockDuration;
         $this->validator = new ConcurrentValueValidator($validator);
+        $this->cacheDriver = $cache ?? $this->resolveDefaultCache();
+        $this->lockDriver = $lock ?? $this->resolveDefaultLock();
 
         if ($key !== null)
         {
@@ -99,113 +135,80 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         }
     }
 
-    // ----------[ ConcurrentValue ]----------
+    // ----------[ Invoke ]----------
 
     /**
-     * Acquire a distributed lock for thread-safe operations on the cached value.
+     * Get, set, or forget the cached value.
      *
-     * This method provides two usage patterns:
-     * 1. Direct execution: Pass a callback to execute immediately within the lock
-     * 2. Chained operations: Call without arguments to get a proxy for method chaining
+     * - No arguments: returns the current value (no lock)
+     * - Null: clears the value
+     * - Callable: executes with current value, stores the result (use &$param for by-reference)
+     * - Other: stores the value directly
      *
-     * The lock prevents race conditions when multiple processes attempt to read/write
-     * the same cached value simultaneously. Uses Redis/database-backed distributed
-     * locking with automatic timeout and cleanup.
-     *
-     * @return HigherOrderConcurrentLockProxy|mixed
-     */
-    private function lock(callable|null $callback = null): mixed
-    {
-        if (is_null($callback)) {
-            return new HigherOrderConcurrentLockProxy($this, fn(callable $callback) => $this->lock($callback));
-        }
-
-        if ($this->isLocked) {
-            return $callback();
-        }
-
-        $lock = Cache::lock("$this->key:lock", self::LOCK_DURATION);
-
-        try {
-            $this->isLocked = true;
-            $lock->block(self::LOCK_DURATION / 2);
-
-            return $callback();
-        } finally {
-            $lock->release();
-            $this->isLocked = false;
-        }
-    }
-
-    /**
-     * Get, set, or forget the cached value
-     *
-     * This method provides three distinct behaviors based on the arguments provided:
-     * 1. No arguments: Returns the current cached value (or default if cache miss)
-     * 2. Null argument: Clears the cached value from storage
-     * 3. Read argument: Executes the provided callable with the current cached value
-     * 4. Value argument: Updates the cached value with the provided value
-     *
-     * When setting a value, if the value is a callable, it will be executed with the current cached value
-     * as an argument, and the result of that callable will be used as the new cached value.
-     *
-     * @param TValue|callable(TValue): TValue|null $value
-     * @param bool $read Whether to read the cached value using the provided callable
+     * @param  TValue|callable(TValue): TValue|null  $value
      * @return TValue|void
      */
-    public function __invoke(mixed $value = null, bool $read = false)
+    public function __invoke(mixed $value = null)
     {
-        // -- Get cached value --
-        if (func_num_args() === 0) {
-            return $this->lock()->get();
+        if (func_num_args() === 0)
+        {
+            return $this->get();
         }
 
-        // -- Read cached value (no lock) --
-        if ($read) {
-            if (! is_callable($value)) {
-                throw new InvalidArgumentException('The value must be callable when using read mode.');
-            }
-
-            return $value($this->get());
-        }
-
-        // -- Forget cached value --
-        if (is_null($value)) {
+        if (is_null($value))
+        {
             $this->lock()->forget();
 
             return;
         }
 
-        // -- Set cached value --
         $this->lock()->set($value);
     }
 
     // ----------[ Magic Methods ]----------
 
+    /**
+     * Proxy method calls to the wrapped value.
+     * Read-only methods (via DeclaresReadOnlyMethods) skip locking.
+     * All other methods acquire a lock, call the method, and write back.
+     */
     public function __call(string $name, array $arguments)
     {
-        if ($this->isReadOnlyMethod($name)) {
-            return $this(fn ($target) => $this->forwardDecoratedCallTo($target, $name, $arguments), read: true);
+        if ($this->isReadOnlyMethod($name))
+        {
+            return $this->forwardDecoratedCallTo($this->get(), $name, $arguments);
         }
 
         return $this->lock()->call($name, $arguments);
     }
 
+    /**
+     * Read a property from the wrapped value (no lock).
+     */
     public function __get(string $name)
     {
-        return $this->lock()->getProperty($name);
+        return $this->getProperty($name);
     }
 
+    /**
+     * Write a property on the wrapped value (acquires lock).
+     */
     public function __set(string $name, mixed $value): void
     {
         $this->lock()->setProperty($name, $value);
     }
 
+    /**
+     * Check if a property exists on the wrapped value (no lock).
+     */
     public function __isset(string $name): bool
     {
-        return $this->lock()->isset($name);
+        return $this->isset($name);
     }
 
+    /**
+     * Unset a property on the wrapped value (acquires lock).
+     */
     public function __unset(string $name): void
     {
         $this->lock()->unset($name);
@@ -215,12 +218,12 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
     public function offsetExists(mixed $offset): bool
     {
-        return $this->lock()->isset($offset);
+        return $this->isset($offset);
     }
 
     public function offsetGet(mixed $offset): mixed
     {
-        return $this->lock()->getProperty($offset);
+        return $this->getProperty($offset);
     }
 
     public function offsetSet(mixed $offset, mixed $value): void
@@ -240,7 +243,8 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         return $this->lock(function () {
             $value = $this->get();
 
-            return match (true) {
+            return match (true)
+            {
                 $value instanceof Traversable => $value,
                 is_array($value) => new ArrayIterator($value),
                 default => throw new InvalidArgumentException('Cached value is not iterable.'),
@@ -248,22 +252,19 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         });
     }
 
-    // ----------[ Repository ]----------
+    // ----------[ Cache ]----------
 
-    protected function repository(): Repository
-    {
-        if ($this->tags) {
-            return Cache::tags($this->tags);
-        }
-
-        return Cache::store();
-    }
-
+    /**
+     * Read the cached value. Falls back to default if missing or invalid.
+     *
+     * @return TValue
+     */
     private function get(): mixed
     {
-        $value = $this->repository()->get($this->key, fn() => $this->resolveDefaultValue());
+        $value = $this->cacheDriver->get($this->key, fn () => $this->resolveDefaultValue());
 
-        if ($this->validator->invalid($value)) {
+        if ($this->validator->invalid($value))
+        {
             $value = $this->resolveDefaultValue();
             $this->forget();
         }
@@ -271,59 +272,140 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         return $value;
     }
 
+    /**
+     * Read a single property from the wrapped value (array key or object property).
+     */
     private function getProperty(string $key): mixed
     {
         $target = $this->get();
 
-        return match (true) {
+        return match (true)
+        {
             is_array($target) => $target[$key] ?? null,
             is_object($target) => $target->{$key} ?? null,
             default => null,
         };
     }
 
+    /**
+     * Write a value to cache. Callables are resolved first — if the first parameter
+     * is a reference, the value is modified in-place without needing a return.
+     *
+     * @throws InvalidArgumentException If the validator rejects the value.
+     */
     private function set(mixed $value = null): void
     {
-        if (is_callable($value) && !is_string($value)) {
-            $value = $value($this->get());
+        if (is_callable($value) && ! is_string($value))
+        {
+            if ($this->acceptsByReference($value))
+            {
+                $current = $this->get();
+                $value($current);
+                $value = $current;
+            }
+            else
+            {
+                $value = $value($this->get());
+            }
         }
 
-        if ($this->validator->invalid($value)) {
+        if ($this->validator->invalid($value))
+        {
             throw new InvalidArgumentException('Invalid value provided for ConcurrentValue.');
         }
 
-        $this->repository()->put($this->key, $value, $this->ttl);
+        $this->cacheDriver->put($this->key, $value, $this->ttl);
     }
 
+    /**
+     * Write a single property on the wrapped value (array key or object property).
+     */
     private function setProperty(string|null $key, mixed $value): void
     {
         $target = $this->get();
 
-        if (is_array($target)) {
-            if (is_null($key)) {
+        if (is_array($target))
+        {
+            if (is_null($key))
+            {
                 $target[] = $value;
-            } else {
+            }
+            else
+            {
                 $target[$key] = $value;
             }
-        } elseif (is_object($target)) {
+        }
+        elseif (is_object($target))
+        {
             $target->{$key} = $value;
         }
 
         $this->set($target);
     }
 
+    /**
+     * Remove the value from cache.
+     */
     private function forget(): void
     {
-        $this->repository()->forget($this->key);
+        $this->cacheDriver->forget($this->key);
+    }
+
+    // ----------[ Locking ]----------
+
+    /**
+     * Acquire a distributed lock for thread-safe write operations.
+     *
+     * Without a callback, returns a proxy for chained method calls within the lock.
+     * With a callback, executes it within the lock and returns the result.
+     * Re-entrant: nested calls within the same lock cycle skip acquisition.
+     *
+     * @return HigherOrderConcurrentLockProxy|mixed
+     */
+    private function lock(callable|null $callback = null): mixed
+    {
+        if (is_null($callback))
+        {
+            return new HigherOrderConcurrentLockProxy($this, fn (callable $callback) => $this->lock($callback));
+        }
+
+        if ($this->isLocked)
+        {
+            return $callback();
+        }
+
+        try
+        {
+            $this->isLocked = true;
+
+            return $this->lockDriver->acquire(
+                "$this->key:lock",
+                $this->lockDuration,
+                $this->lockDuration,
+                $callback
+            );
+        }
+        finally
+        {
+            $this->isLocked = false;
+        }
     }
 
     // ----------[ Helpers ]----------
 
+    /**
+     * Resolve the default value, calling it if it's a callable.
+     *
+     * @return TValue
+     */
     private function resolveDefaultValue(): mixed
     {
-        return value($this->default);
+        return is_callable($this->default) ? ($this->default)() : $this->default;
     }
 
+    /**
+     * Call a method on the wrapped value within a lock, then write back.
+     */
     private function call(string $name, array $arguments): mixed
     {
         $target = $this->get();
@@ -333,24 +415,34 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         return $result;
     }
 
+    /**
+     * Unset a property on the wrapped value (array key or object property).
+     */
     private function unset(string $property): void
     {
         $target = $this->get();
 
-        if (is_array($target)) {
+        if (is_array($target))
+        {
             unset($target[$property]);
-        } elseif (is_object($target)) {
+        }
+        elseif (is_object($target))
+        {
             unset($target->{$property});
         }
 
         $this->set($target);
     }
 
+    /**
+     * Check if a property exists on the wrapped value.
+     */
     private function isset(string $property): bool
     {
         $target = $this->get();
 
-        return match (true) {
+        return match (true)
+        {
             is_array($target) => isset($target[$property]),
             is_object($target) => isset($target->{$property}),
             default => false,
@@ -358,7 +450,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     }
 
     /**
-     * Check if the method is declared as read-only by the cached value or the wrapper itself.
+     * Check if the method is declared as read-only on this Concurrent subclass.
      */
     private function isReadOnlyMethod(string $name): bool
     {
@@ -366,12 +458,110 @@ class Concurrent implements ArrayAccess, IteratorAggregate
             && in_array($name, static::readOnlyMethods(), true);
     }
 
+    /**
+     * Check if the callable's first parameter is a reference (&$param).
+     * Used to determine whether to pass the value by reference for in-place modification.
+     */
+    private function acceptsByReference(callable $callable): bool
+    {
+        $ref = new \ReflectionFunction($callable);
+
+        return $ref->getNumberOfParameters() > 0
+            && $ref->getParameters()[0]->isPassedByReference();
+    }
+
+    // ----------[ Method Forwarding ]----------
+
+    /**
+     * Forward a method call to the given object, rethrowing errors as BadMethodCallException
+     * with the Concurrent class name for clearer stack traces.
+     */
+    private function forwardCallTo(mixed $object, string $method, array $parameters): mixed
+    {
+        try
+        {
+            return $object->{$method}(...$parameters);
+        }
+        catch (\Error|\BadMethodCallException $e)
+        {
+            if (! preg_match('~^Call to undefined method (?P<class>[^:]+)::(?P<method>[^\(]+)\(\)$~', $e->getMessage(), $matches))
+            {
+                throw $e;
+            }
+
+            if ($matches['class'] !== get_class($object) || $matches['method'] !== $method)
+            {
+                throw $e;
+            }
+
+            throw new \BadMethodCallException(
+                sprintf('Call to undefined method %s::%s()', static::class, $method)
+            );
+        }
+    }
+
+    /**
+     * Forward a method call, returning $this instead of the target when the target returns itself.
+     * This preserves fluent chaining on the Concurrent wrapper.
+     */
+    private function forwardDecoratedCallTo(mixed $object, string $method, array $parameters): mixed
+    {
+        $result = $this->forwardCallTo($object, $method, $parameters);
+
+        return $result === $object ? $this : $result;
+    }
+
+    // ----------[ Default Resolution ]----------
+
+    /**
+     * Resolve the default cache backend from Laravel's container.
+     *
+     * @throws RuntimeException If Laravel is not available.
+     */
+    private function resolveDefaultCache(): CacheDriver
+    {
+        if ($this->hasLaravel())
+        {
+            return app(CacheDriver::class);
+        }
+
+        throw new RuntimeException(
+            'No cache provided. Pass cache: to the constructor or install the Laravel integration.'
+        );
+    }
+
+    /**
+     * Resolve the default lock backend from Laravel's container.
+     *
+     * @throws RuntimeException If Laravel is not available.
+     */
+    private function resolveDefaultLock(): LockDriver
+    {
+        if ($this->hasLaravel())
+        {
+            return app(LockDriver::class);
+        }
+
+        throw new RuntimeException(
+            'No lock provided. Pass lock: to the constructor or install the Laravel integration.'
+        );
+    }
+
+    /**
+     * Check if Laravel's application class is available.
+     */
+    private function hasLaravel(): bool
+    {
+        return class_exists(\Illuminate\Foundation\Application::class) && function_exists('app');
+    }
+
     // ----------[ Auto-Key Resolution ]----------
 
     /**
-     * Resolve the source object that owns this instance as a property.
+     * Resolve the object that owns this instance as a property.
+     * Walks the call stack to find the constructor that created this instance.
      *
-     * @throws RuntimeException
+     * @throws RuntimeException If no owning constructor is found.
      */
     private function resolveSource(): mixed
     {
@@ -396,8 +586,9 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
     /**
      * Generate a cache key from the owning class name and property name.
+     * E.g. "App\Services\RateLimiter:attempts"
      *
-     * @throws RuntimeException
+     * @throws RuntimeException If no matching property is found.
      */
     private function resolveKeyFromSourceProperty(): string
     {
