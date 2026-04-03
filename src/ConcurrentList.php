@@ -6,8 +6,8 @@ namespace JesseGall\Concurrent;
  * A thread-safe ordered list backed by cache.
  *
  * Allows duplicates and preserves insertion order.
- * The `each()`, `map()`, and `filter()` methods hold the lock for the entire operation.
- * Use `chain()` to batch multiple operations under a single lock.
+ * Methods are chainable. Use `lock: true` on __invoke to batch
+ * multiple operations under a single lock.
  */
 class ConcurrentList extends Concurrent
 {
@@ -24,9 +24,11 @@ class ConcurrentList extends Concurrent
     /**
      * Append a value to the list.
      */
-    public function add(mixed $value): void
+    public function add(mixed $value): static
     {
         $this(fn (array &$list) => $list[] = $value);
+
+        return $this;
     }
 
     /**
@@ -40,11 +42,13 @@ class ConcurrentList extends Concurrent
     /**
      * Remove a value by index and re-index the list.
      */
-    public function remove(int $index): void
+    public function remove(int $index): static
     {
         $this(function (array &$list) use ($index) {
             array_splice($list, $index, 1);
         });
+
+        return $this;
     }
 
     /**
@@ -75,16 +79,16 @@ class ConcurrentList extends Concurrent
 
     /**
      * Start a chain of operations that execute inside a single lock.
-     * The chain is flushed when the returned object is destroyed.
      *
      *   $list->chain()
      *        ->map(fn (float $price) => $price * 1.1)
-     *        ->filter(fn (float $price) => $price > 15)
-     *        ->each(fn (float $price) => log($price));
+     *        ->filter(fn (float $price) => $price > 15);
+     *
+     * @return HigherOrderConcurrentChainProxy
      */
-    public function chain(): ConcurrentListChain
+    public function chain(): HigherOrderConcurrentChainProxy
     {
-        return new ConcurrentListChain($this);
+        return new HigherOrderConcurrentChainProxy($this);
     }
 
     /**
@@ -93,9 +97,19 @@ class ConcurrentList extends Concurrent
      *
      * @param  callable(mixed $value, int $index): mixed  $callback
      */
-    public function each(callable $callback): void
+    public function each(callable $callback): static
     {
-        $this->chain()->each($callback)->flush();
+        $this(function (array &$list) use ($callback) {
+            foreach ($list as $index => $value)
+            {
+                if ($callback($value, $index) === false)
+                {
+                    break;
+                }
+            }
+        });
+
+        return $this;
     }
 
     /**
@@ -109,12 +123,25 @@ class ConcurrentList extends Concurrent
      *
      * @param  callable(mixed $value, int $index): mixed  $callback
      */
-    /**
-     * @return list<mixed>
-     */
-    public function map(callable $callback): array
+    public function map(callable $callback): static
     {
-        return $this->chain()->map($callback)->flush();
+        $byReference = CallableInspector::acceptsByReference($callback);
+
+        $this(function (array &$list) use ($callback, $byReference) {
+            foreach ($list as $index => &$value)
+            {
+                if ($byReference)
+                {
+                    $callback($value, $index);
+                }
+                else
+                {
+                    $value = $callback($value, $index);
+                }
+            }
+        });
+
+        return $this;
     }
 
     /**
@@ -122,19 +149,20 @@ class ConcurrentList extends Concurrent
      *
      * @param  callable(mixed $value, int $index): bool  $callback
      */
-    /**
-     * @return list<mixed>
-     */
-    public function filter(callable $callback): array
+    public function filter(callable $callback): static
     {
-        return $this->chain()->filter($callback)->flush();
+        $this(fn (array $list) => array_values(array_filter($list, $callback, ARRAY_FILTER_USE_BOTH)));
+
+        return $this;
     }
 
     /**
      * Remove all items from the list.
      */
-    public function clear(): void
+    public function clear(): static
     {
         $this(fn () => []);
+
+        return $this;
     }
 }

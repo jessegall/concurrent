@@ -109,16 +109,14 @@ $queue->clear();
 
 #### ConcurrentList
 
-An ordered list — allows duplicates, preserves insertion order. The `each()`, `map()`, and `filter()` methods hold the lock for the entire operation.
+An ordered list — allows duplicates, preserves insertion order. All methods are chainable.
 
 ```php
 use JesseGall\Concurrent\ConcurrentList;
 
 $list = new ConcurrentList('app:prices');
 
-$list->add(10.00);
-$list->add(20.00);
-$list->add(30.00);
+$list->add(10.00)->add(20.00)->add(30.00);
 $list->get(0);                // 10.00
 $list->get(99, 'default');    // "default"
 $list->count();               // 3
@@ -134,21 +132,19 @@ $list->each(function (float $price) {
 
 // Transform — with & or return value
 $list->map(fn (float $price) => $price * 1.1);
-$list->map(function (float &$price) {
-    $price *= 1.1;
-});
 
 // Filter — keep items matching the predicate
 $list->filter(fn (float $price) => $price > 15.00);
 
-// Chain — multiple operations in a single lock (one read, one write)
+// Methods are chainable — each holds its own lock
+$list->map(fn (float $price) => $price * 1.1)
+     ->filter(fn (float $price) => $price > 15.00);
+
+// Chain — single lock for all operations
 $list->chain()
-    ->map(fn (float $price) => $price * 1.1)
-    ->filter(fn (float $price) => $price > 15.00)
-    ->each(function (float $price) {
-        log($price);
-    })
-    ->flush();
+     ->map(fn (float $price) => $price * 1.1)
+     ->filter(fn (float $price) => $price > 15.00)
+     ->each(fn (float $price) => log($price));
 ```
 
 ### Wrapping any value
