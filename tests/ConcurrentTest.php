@@ -491,6 +491,35 @@ class ConcurrentTest extends TestCase
         $this->assertSame(3, $concurrent->count);
     }
 
+    public function test_property_increment_is_separate_read_and_write(): void
+    {
+        $obj = new class {
+            public int $count = 0;
+        };
+
+        $cache = new LoggingCache;
+        $concurrent = new Concurrent(
+            key: 'test:increment-rw',
+            default: fn () => clone $obj,
+            ttl: 60,
+            cache: $cache,
+            lock: new \JesseGall\Concurrent\Testing\InMemoryLock,
+        );
+
+        $cache->reset();
+
+        // count++ triggers __get (read) then __set (write) as two separate operations
+        $concurrent->count++;
+
+        $operations = $cache->operations();
+
+        // First: a get to read the property (__get → get())
+        // Then: a get + put inside the lock to write the new value (__set → setProperty → get + set)
+        $this->assertSame('get', $operations[0]['op']);
+        $this->assertSame('get', $operations[1]['op']);
+        $this->assertSame('put', $operations[2]['op']);
+    }
+
     public function test_subclass_wraps_object_with_custom_methods(): void
     {
         $progress = new TestImportProgress('shop-123');
@@ -846,6 +875,49 @@ class TestReadOnlyData
     public function getStatus(): string
     {
         return 'active';
+    }
+}
+
+class LoggingCache implements \JesseGall\Concurrent\Contracts\CacheDriver
+{
+    private \JesseGall\Concurrent\Testing\InMemoryCache $inner;
+
+    /** @var list<array{op: string, key: string}> */
+    private array $log = [];
+
+    public function __construct()
+    {
+        $this->inner = new \JesseGall\Concurrent\Testing\InMemoryCache;
+    }
+
+    public function get(string $key, mixed $default = null): mixed
+    {
+        $this->log[] = ['op' => 'get', 'key' => $key];
+
+        return $this->inner->get($key, $default);
+    }
+
+    public function put(string $key, mixed $value, int $ttl): void
+    {
+        $this->log[] = ['op' => 'put', 'key' => $key];
+        $this->inner->put($key, $value, $ttl);
+    }
+
+    public function forget(string $key): void
+    {
+        $this->log[] = ['op' => 'forget', 'key' => $key];
+        $this->inner->forget($key);
+    }
+
+    /** @return list<array{op: string, key: string}> */
+    public function operations(): array
+    {
+        return $this->log;
+    }
+
+    public function reset(): void
+    {
+        $this->log = [];
     }
 }
 
