@@ -134,13 +134,13 @@ $list->each(function (float $price) {
     if ($price > 20.00) return false; // stop early
 });
 
-// Transform — with & or return value
+// Transform — lock held for entire operation, with & or return value
 $list->map(function (float &$price) {
     $price *= 1.1;
 });
 $list->map(fn (float $price) => $price * 1.1);
 
-// Filter — keep items matching the predicate
+// Filter — lock held for entire operation, keep items matching the predicate
 $list->filter(fn (float $price) => $price > 15.00);
 
 $list->isEmpty();         // false
