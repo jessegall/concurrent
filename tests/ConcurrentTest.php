@@ -80,6 +80,20 @@ class ConcurrentTest extends TestCase
         $lock->release();
     }
 
+    public function test_write_blocks_when_lock_is_held(): void
+    {
+        $concurrent = new Concurrent(key: 'test:write-blocks', default: 0, ttl: 60);
+
+        // Acquire the lock externally — simulates another process holding it
+        $lock = \Illuminate\Support\Facades\Cache::lock('test:write-blocks:lock', 10);
+        $lock->get();
+
+        // Write should block and eventually throw because the lock can't be acquired
+        $this->expectException(\Illuminate\Contracts\Cache\LockTimeoutException::class);
+
+        $concurrent(42);
+    }
+
     public function test_read_only_method_does_not_lock(): void
     {
         $concurrent = new TestReadOnlyConcurrent('test:readonly-no-lock');
