@@ -146,31 +146,12 @@ class ConcurrentTest extends TestCase
 
     public function test_read_only_methods_skip_lock_and_write(): void
     {
-        $session = new class implements DeclaresReadOnlyMethods {
-            public int $writeCount = 0;
-
-            public static function readOnlyMethods(): array
-            {
-                return ['getStatus'];
-            }
-
-            public function setStatus(string $status): void
-            {
-                $this->writeCount++;
-            }
-
-            public function getStatus(): string
-            {
-                return 'active';
-            }
-        };
-
-        $concurrent = new Concurrent('test:readonly', default: fn () => clone $session, ttl: 60);
+        $concurrent = new TestReadOnlyConcurrent('test:readonly');
 
         // Writer method — triggers lock + write
         $concurrent->setStatus('ready');
 
-        // Reader method — skips lock + write
+        // Reader method — no lock, no write
         $result = $concurrent->getStatus();
         $this->assertSame('active', $result);
     }
@@ -741,6 +722,38 @@ class TestCreatesInMethod
     public function create(): Concurrent
     {
         return new Concurrent(default: 'value', ttl: 60);
+    }
+}
+
+class TestReadOnlyData
+{
+    public int $writeCount = 0;
+
+    public function setStatus(string $status): void
+    {
+        $this->writeCount++;
+    }
+
+    public function getStatus(): string
+    {
+        return 'active';
+    }
+}
+
+class TestReadOnlyConcurrent extends Concurrent implements DeclaresReadOnlyMethods
+{
+    public function __construct(string $key)
+    {
+        parent::__construct(
+            key: $key,
+            default: fn () => new TestReadOnlyData,
+            ttl: 60,
+        );
+    }
+
+    public static function readOnlyMethods(): array
+    {
+        return ['getStatus'];
     }
 }
 

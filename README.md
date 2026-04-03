@@ -504,30 +504,36 @@ When used as a class property without a key, the cache key is auto-generated (se
 
 By default, every method call on a wrapped object acquires a lock, reads the value from cache, executes the method, writes the modified value back, and releases the lock. For methods that only read state, this is unnecessary overhead.
 
-Implement `DeclaresReadOnlyMethods` to mark methods that should skip the lock and write-back:
+Implement `DeclaresReadOnlyMethods` on the `Concurrent` subclass to mark methods that should skip the lock and write-back:
 
 ```php
+use JesseGall\Concurrent\Concurrent;
 use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
 
-class Counter implements DeclaresReadOnlyMethods
+class CounterData
 {
     public int $count = 0;
+
+    public function increment(): void { $this->count++; }
+    public function getCount(): int   { return $this->count; }
+}
+
+class Counter extends Concurrent implements DeclaresReadOnlyMethods
+{
+    public function __construct(string $key)
+    {
+        parent::__construct(key: $key, default: fn () => new CounterData, ttl: 3600);
+    }
 
     public static function readOnlyMethods(): array
     {
         return ['getCount']; // skips lock + write-back
     }
-
-    public function increment(): void   // locks, reads, increments, writes
-    {
-        $this->count++;
-    }
-
-    public function getCount(): int     // just reads from cache
-    {
-        return $this->count;
-    }
 }
+
+$counter = new Counter('my-counter');
+$counter->increment(); // locks, reads, increments, writes
+$counter->getCount();  // just reads from cache — no lock
 ```
 
 ## Validation

@@ -374,15 +374,8 @@ class Concurrent implements ArrayAccess, IteratorAggregate
      */
     private function isReadOnlyMethod(string $name): bool
     {
-        foreach ([fn () => $this, fn () => $this->get()] as $resolve) {
-            $source = $resolve();
-
-            if ($source instanceof DeclaresReadOnlyMethods && in_array($name, $source::readOnlyMethods(), true)) {
-                return true;
-            }
-        }
-
-        return false;
+        return $this instanceof DeclaresReadOnlyMethods
+            && in_array($name, static::readOnlyMethods(), true);
     }
 
     // ----------[ Auto-Key Resolution ]----------
