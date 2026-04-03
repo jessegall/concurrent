@@ -109,7 +109,7 @@ $queue->clear();
 
 #### ConcurrentList
 
-An ordered list — allows duplicates, preserves insertion order. The `each()` method holds the lock for the entire iteration.
+An ordered list — allows duplicates, preserves insertion order. The `each()`, `map()`, and `filter()` methods hold the lock for the entire operation.
 
 ```php
 use JesseGall\Concurrent\ConcurrentList;
