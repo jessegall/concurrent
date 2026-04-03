@@ -119,32 +119,27 @@ $list = new ConcurrentList('app:prices');
 $list->add(10.00);
 $list->add(20.00);
 $list->add(30.00);
+$list->get(0);                // 10.00
+$list->get(99, 'default');    // "default"
+$list->count();               // 3
+$list->all();                 // [10.00, 20.00, 30.00]
+$list->remove(1);             // re-indexes automatically
+$list->isEmpty();             // false
+$list->clear();
 
-$list->get(0);            // 10.00
-$list->get(99, 'default'); // "default"
-$list->count();           // 3
-$list->all();             // [10.00, 20.00, 30.00]
-
-// Remove by index (re-indexes automatically)
-$list->remove(1);         // [10.00, 30.00]
-
-// Iterate — lock held for entire loop, return false to break
+// Iterate — return false to break early
 $list->each(function (float $price) {
-    echo $price;
-    if ($price > 20.00) return false; // stop early
+    if ($price > 20.00) return false;
 });
 
-// Transform — lock held for entire operation, with & or return value
+// Transform — with & or return value
+$list->map(fn (float $price) => $price * 1.1);
 $list->map(function (float &$price) {
     $price *= 1.1;
 });
-$list->map(fn (float $price) => $price * 1.1);
 
-// Filter — lock held for entire operation, keep items matching the predicate
+// Filter — keep items matching the predicate
 $list->filter(fn (float $price) => $price > 15.00);
-
-$list->isEmpty();         // false
-$list->clear();
 ```
 
 ### Wrapping any value
