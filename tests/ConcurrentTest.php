@@ -127,47 +127,46 @@ class ConcurrentTest extends TestCase
 
     public function test_get_does_not_lock(): void
     {
+        $lock = new BlockingLock;
+        Concurrent::useLock($lock);
+
         $concurrent = new Concurrent(key: 'test:get-no-lock', default: 42, ttl: 60);
         $concurrent(42);
 
-        // Acquire the lock externally
-        $lock = \Illuminate\Support\Facades\Cache::lock('test:get-no-lock:lock', 10);
-        $lock->get();
+        $lock->hold();
 
         // Get should still work even though the lock is held
         $this->assertSame(42, $concurrent());
-
-        $lock->release();
     }
 
     public function test_write_blocks_when_lock_is_held(): void
     {
+        $lock = new BlockingLock;
+        Concurrent::useLock($lock);
+
         $concurrent = new Concurrent(key: 'test:write-blocks', default: 0, ttl: 60);
 
-        // Acquire the lock externally — simulates another process holding it
-        $lock = \Illuminate\Support\Facades\Cache::lock('test:write-blocks:lock', 10);
-        $lock->get();
+        $lock->hold();
 
-        // Write should block and eventually throw because the lock can't be acquired
-        $this->expectException(\Illuminate\Contracts\Cache\LockTimeoutException::class);
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Lock is already held');
 
         $concurrent(42);
     }
 
     public function test_read_only_method_does_not_lock(): void
     {
+        $lock = new BlockingLock;
+        Concurrent::useLock($lock);
+
         $concurrent = new TestReadOnlyConcurrent('test:readonly-no-lock');
         $concurrent->setStatus('ready');
 
-        // Acquire the lock externally
-        $lock = \Illuminate\Support\Facades\Cache::lock('test:readonly-no-lock:lock', 10);
-        $lock->get();
+        $lock->hold();
 
-        // Read-only method should still work
+        // Read-only method should still work even though the lock is held
         $result = $concurrent->getStatus();
         $this->assertSame('active', $result);
-
-        $lock->release();
     }
 
     public function test_proxies_method_calls_to_wrapped_object(): void
@@ -498,12 +497,13 @@ class ConcurrentTest extends TestCase
         };
 
         $cache = new LoggingCache;
+        Concurrent::useCache($cache);
+        Concurrent::useLock(new \JesseGall\Concurrent\Testing\InMemoryLock);
+
         $concurrent = new Concurrent(
             key: 'test:increment-rw',
             default: fn () => clone $obj,
             ttl: 60,
-            cache: $cache,
-            lock: new \JesseGall\Concurrent\Testing\InMemoryLock,
         );
 
         $cache->reset();
@@ -918,6 +918,29 @@ class LoggingCache implements \JesseGall\Concurrent\Contracts\CacheDriver
     public function reset(): void
     {
         $this->log = [];
+    }
+}
+
+class BlockingLock implements \JesseGall\Concurrent\Contracts\LockDriver
+{
+    private bool $held = false;
+
+    /**
+     * Simulate an external process holding the lock.
+     */
+    public function hold(): void
+    {
+        $this->held = true;
+    }
+
+    public function acquire(string $key, int $ttl, int $timeout, callable $callback): mixed
+    {
+        if ($this->held)
+        {
+            throw new \RuntimeException('Lock is already held');
+        }
+
+        return $callback();
     }
 }
 

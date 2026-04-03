@@ -2,7 +2,7 @@
 
 Thread-safe shared state for PHP. Wrap any value — objects, arrays, scalars — in a concurrent proxy that handles locking, caching, and persistence across processes automatically. Works with Laravel out of the box, or with any PHP project via pluggable cache and lock drivers.
 
-Ships with ready-to-use data structures: `ConcurrentMap`, `ConcurrentSet`, `ConcurrentCounter`, and `ConcurrentQueue`.
+Ships with ready-to-use data structures: `ConcurrentMap`, `ConcurrentSet`, `ConcurrentCounter`, `ConcurrentQueue`, and `ConcurrentList`.
 
 ## Why?
 
@@ -107,6 +107,46 @@ $queue->isEmpty();  // false
 $queue->clear();
 ```
 
+#### ConcurrentList
+
+An ordered list — allows duplicates, preserves insertion order. The `each()` method holds the lock for the entire iteration.
+
+```php
+use JesseGall\Concurrent\ConcurrentList;
+
+$list = new ConcurrentList('app:prices');
+
+$list->add(10.00);
+$list->add(20.00);
+$list->add(30.00);
+
+$list->get(0);            // 10.00
+$list->get(99, 'default'); // "default"
+$list->count();           // 3
+$list->all();             // [10.00, 20.00, 30.00]
+
+// Remove by index (re-indexes automatically)
+$list->remove(1);         // [10.00, 30.00]
+
+// Iterate — lock held for entire loop, return false to break
+$list->each(function (float $price) {
+    echo $price;
+    if ($price > 20.00) return false; // stop early
+});
+
+// Transform — with & or return value
+$list->map(function (float &$price) {
+    $price *= 1.1;
+});
+$list->map(fn (float $price) => $price * 1.1);
+
+// Filter — keep items matching the predicate
+$list->filter(fn (float $price) => $price > 15.00);
+
+$list->isEmpty();         // false
+$list->clear();
+```
+
 ### Wrapping any value
 
 Turning any value into a concurrent value is as simple as wrapping it in a `Concurrent` instance. Method calls, property access, array operations — everything is proxied through the cache with locking.
@@ -137,7 +177,7 @@ $counter(fn ($current) => $current + 1); // atomic update (locks)
 $counter(null);                          // forget (locks)
 
 // Reference parameters — modify directly, no return needed:
-$counter(function (&$value) {
+$counter(function (int &$value) {
     $value += 10;
 });
 
@@ -222,7 +262,7 @@ class ProcessingSession extends Concurrent implements DeclaresReadOnlyMethods
     // Reference parameter — atomic multi-field update
     public function start(int $total): void
     {
-        $this(function (&$data) use ($total) {
+        $this(function (SessionData &$data) use ($total) {
             $data->total = $total;
             $data->status = 'processing';
         });
@@ -231,13 +271,13 @@ class ProcessingSession extends Concurrent implements DeclaresReadOnlyMethods
     // Invoke with & — atomic increment
     public function advance(): void
     {
-        $this(fn (&$data) => $data->processed++);
+        $this(fn (SessionData &$data) => $data->processed++);
     }
 
     // Reference — array append
     public function addError(string $message): void
     {
-        $this(fn (&$data) => $data->errors[] = $message);
+        $this(fn (SessionData &$data) => $data->errors[] = $message);
     }
 
     // Property proxy — simple overwrite
@@ -283,11 +323,18 @@ class RedisLock implements LockDriver
 }
 ```
 
-Then pass them to the constructor:
+Then configure them globally — all `Concurrent` instances (including built-in data structures) will use these drivers:
 
 ```php
 use JesseGall\Concurrent\Concurrent;
 
+Concurrent::useCache(new RedisCache());
+Concurrent::useLock(new RedisLock());
+```
+
+Or pass them to a specific instance:
+
+```php
 $concurrent = new Concurrent(
     key: 'my-key',
     default: 0,
@@ -302,12 +349,11 @@ For testing, the package ships with `InMemoryCache` and `InMemoryLock`:
 use JesseGall\Concurrent\Testing\InMemoryCache;
 use JesseGall\Concurrent\Testing\InMemoryLock;
 
-$concurrent = new Concurrent(
-    key: 'test',
-    default: 0,
-    cache: new InMemoryCache(),
-    lock: new InMemoryLock(),
-);
+Concurrent::useCache(new InMemoryCache());
+Concurrent::useLock(new InMemoryLock());
+
+// Reset to default resolution (e.g. in tearDown)
+Concurrent::resetDrivers();
 ```
 
 With Laravel, no setup needed — the service provider auto-registers the cache and lock backends.

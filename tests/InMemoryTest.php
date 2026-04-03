@@ -12,21 +12,24 @@ use PHPUnit\Framework\TestCase as BaseTestCase;
  */
 class InMemoryTest extends BaseTestCase
 {
-    private InMemoryCache $cache;
-
-    private InMemoryLock $lock;
-
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->cache = new InMemoryCache;
-        $this->lock = new InMemoryLock;
+        Concurrent::useCache(new InMemoryCache);
+        Concurrent::useLock(new InMemoryLock);
+    }
+
+    protected function tearDown(): void
+    {
+        Concurrent::resetDrivers();
+
+        parent::tearDown();
     }
 
     public function test_get_and_set(): void
     {
-        $concurrent = new Concurrent(key: 'test', default: 0, cache: $this->cache, lock: $this->lock);
+        $concurrent = new Concurrent(key: 'test', default: 0);
 
         $concurrent(42);
 
@@ -35,21 +38,21 @@ class InMemoryTest extends BaseTestCase
 
     public function test_default_value(): void
     {
-        $concurrent = new Concurrent(key: 'test', default: 'hello', cache: $this->cache, lock: $this->lock);
+        $concurrent = new Concurrent(key: 'test', default: 'hello');
 
         $this->assertSame('hello', $concurrent());
     }
 
     public function test_callable_default(): void
     {
-        $concurrent = new Concurrent(key: 'test', default: fn () => ['empty'], cache: $this->cache, lock: $this->lock);
+        $concurrent = new Concurrent(key: 'test', default: fn () => ['empty']);
 
         $this->assertSame(['empty'], $concurrent());
     }
 
     public function test_forget(): void
     {
-        $concurrent = new Concurrent(key: 'test', default: 'initial', cache: $this->cache, lock: $this->lock);
+        $concurrent = new Concurrent(key: 'test', default: 'initial');
 
         $concurrent('stored');
         $concurrent(null);
@@ -59,7 +62,7 @@ class InMemoryTest extends BaseTestCase
 
     public function test_reference_parameter(): void
     {
-        $concurrent = new Concurrent(key: 'test', default: 0, cache: $this->cache, lock: $this->lock);
+        $concurrent = new Concurrent(key: 'test', default: 0);
 
         $concurrent(10);
         $concurrent(function (&$value) {
@@ -80,7 +83,7 @@ class InMemoryTest extends BaseTestCase
             }
         };
 
-        $concurrent = new Concurrent(key: 'test', default: fn () => clone $obj, cache: $this->cache, lock: $this->lock);
+        $concurrent = new Concurrent(key: 'test', default: fn () => clone $obj);
 
         $concurrent->increment();
         $concurrent->increment();
@@ -90,7 +93,7 @@ class InMemoryTest extends BaseTestCase
 
     public function test_array_access(): void
     {
-        $concurrent = new Concurrent(key: 'test', default: fn () => [], cache: $this->cache, lock: $this->lock);
+        $concurrent = new Concurrent(key: 'test', default: fn () => []);
 
         $concurrent['key'] = 'value';
 
@@ -100,11 +103,12 @@ class InMemoryTest extends BaseTestCase
 
     public function test_shared_cache_instance(): void
     {
-        $a = new Concurrent(key: 'shared', default: 0, cache: $this->cache, lock: $this->lock);
-        $b = new Concurrent(key: 'shared', default: 0, cache: $this->cache, lock: $this->lock);
+        $a = new Concurrent(key: 'shared', default: 0);
+        $b = new Concurrent(key: 'shared', default: 0);
 
         $a(42);
 
         $this->assertSame(42, $b());
     }
+
 }

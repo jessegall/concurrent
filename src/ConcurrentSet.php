@@ -25,11 +25,7 @@ class ConcurrentSet extends Concurrent
      */
     public function add(string $value): void
     {
-        $this(function (array $set) use ($value) {
-            $set[$value] = true;
-
-            return $set;
-        });
+        $this(fn (array &$set) => $set[$value] = true);
     }
 
     /**
@@ -37,10 +33,8 @@ class ConcurrentSet extends Concurrent
      */
     public function remove(string $value): void
     {
-        $this(function (array $set) use ($value) {
+        $this(function (array &$set) use ($value) {
             unset($set[$value]);
-
-            return $set;
         });
     }
 

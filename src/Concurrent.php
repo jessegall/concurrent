@@ -3,7 +3,6 @@
 namespace JesseGall\Concurrent;
 
 use ArrayAccess;
-use ArrayIterator;
 use InvalidArgumentException;
 use IteratorAggregate;
 use JesseGall\Concurrent\Contracts\CacheDriver;
@@ -26,10 +25,24 @@ use Traversable;
  */
 class Concurrent implements ArrayAccess, IteratorAggregate
 {
+    use ForwardsCallsToTarget;
+
     /**
      * Maximum depth for debug_backtrace when resolving the owning class for auto-key generation.
      */
     private const int MAX_BACKTRACE_DEPTH = 10;
+
+    /**
+     * Default cache driver. When set, all new instances use this instead of
+     * resolving from the constructor or Laravel container.
+     */
+    private static CacheDriver|null $defaultCache = null;
+
+    /**
+     * Default lock driver. When set, all new instances use this instead of
+     * resolving from the constructor or Laravel container.
+     */
+    private static LockDriver|null $defaultLock = null;
 
     /**
      * The default value returned on cache miss. Can be a callable for lazy resolution.
@@ -133,6 +146,33 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         {
             $this->source = $this->resolveSource();
         }
+    }
+
+    // ----------[ Global Driver Configuration ]----------
+
+    /**
+     * Set the global cache driver for all new Concurrent instances.
+     */
+    public static function useCache(CacheDriver $cache): void
+    {
+        self::$defaultCache = $cache;
+    }
+
+    /**
+     * Set the global lock driver for all new Concurrent instances.
+     */
+    public static function useLock(LockDriver $lock): void
+    {
+        self::$defaultLock = $lock;
+    }
+
+    /**
+     * Reset global driver overrides to default resolution.
+     */
+    public static function resetDrivers(): void
+    {
+        self::$defaultCache = null;
+        self::$defaultLock = null;
     }
 
     // ----------[ Invoke ]----------
@@ -240,16 +280,14 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
     public function getIterator(): Traversable
     {
-        return $this->lock(function () {
-            $value = $this->get();
+        $value = $this->get();
 
-            return match (true)
-            {
-                $value instanceof Traversable => $value,
-                is_array($value) => new ArrayIterator($value),
-                default => throw new InvalidArgumentException('Cached value is not iterable.'),
-            };
-        });
+        return match (true)
+        {
+            is_array($value) => new \ArrayIterator($value),
+            $value instanceof Traversable => $value,
+            default => throw new InvalidArgumentException('Cached value is not iterable.'),
+        };
     }
 
     // ----------[ Cache ]----------
@@ -464,51 +502,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
      */
     private function acceptsByReference(callable $callable): bool
     {
-        $ref = new \ReflectionFunction($callable);
-
-        return $ref->getNumberOfParameters() > 0
-            && $ref->getParameters()[0]->isPassedByReference();
-    }
-
-    // ----------[ Method Forwarding ]----------
-
-    /**
-     * Forward a method call to the given object, rethrowing errors as BadMethodCallException
-     * with the Concurrent class name for clearer stack traces.
-     */
-    private function forwardCallTo(mixed $object, string $method, array $parameters): mixed
-    {
-        try
-        {
-            return $object->{$method}(...$parameters);
-        }
-        catch (\Error|\BadMethodCallException $e)
-        {
-            if (! preg_match('~^Call to undefined method (?P<class>[^:]+)::(?P<method>[^\(]+)\(\)$~', $e->getMessage(), $matches))
-            {
-                throw $e;
-            }
-
-            if ($matches['class'] !== get_class($object) || $matches['method'] !== $method)
-            {
-                throw $e;
-            }
-
-            throw new \BadMethodCallException(
-                sprintf('Call to undefined method %s::%s()', static::class, $method)
-            );
-        }
-    }
-
-    /**
-     * Forward a method call, returning $this instead of the target when the target returns itself.
-     * This preserves fluent chaining on the Concurrent wrapper.
-     */
-    private function forwardDecoratedCallTo(mixed $object, string $method, array $parameters): mixed
-    {
-        $result = $this->forwardCallTo($object, $method, $parameters);
-
-        return $result === $object ? $this : $result;
+        return CallableInspector::acceptsByReference($callable);
     }
 
     // ----------[ Default Resolution ]----------
@@ -520,30 +514,41 @@ class Concurrent implements ArrayAccess, IteratorAggregate
      */
     private function resolveDefaultCache(): CacheDriver
     {
+        if (self::$defaultCache !== null)
+        {
+            return self::$defaultCache;
+        }
+
         if ($this->hasLaravel())
         {
             return app(CacheDriver::class);
         }
 
         throw new RuntimeException(
-            'No cache provided. Pass cache: to the constructor or install the Laravel integration.'
+            'No cache provided. Call Concurrent::useCache() or pass cache: to the constructor.'
         );
     }
 
     /**
-     * Resolve the default lock backend from Laravel's container.
+     * Resolve the default lock backend. Checks global override first,
+     * then falls back to Laravel's container.
      *
-     * @throws RuntimeException If Laravel is not available.
+     * @throws RuntimeException If no lock driver is available.
      */
     private function resolveDefaultLock(): LockDriver
     {
+        if (self::$defaultLock !== null)
+        {
+            return self::$defaultLock;
+        }
+
         if ($this->hasLaravel())
         {
             return app(LockDriver::class);
         }
 
         throw new RuntimeException(
-            'No lock provided. Pass lock: to the constructor or install the Laravel integration.'
+            'No lock provided. Call Concurrent::useLock() or pass lock: to the constructor.'
         );
     }
 

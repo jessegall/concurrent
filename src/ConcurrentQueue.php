@@ -25,11 +25,7 @@ class ConcurrentQueue extends Concurrent
      */
     public function push(mixed $value): void
     {
-        $this(function (array $queue) use ($value) {
-            $queue[] = $value;
-
-            return $queue;
-        });
+        $this(fn (array &$queue) => $queue[] = $value);
     }
 
     /**
