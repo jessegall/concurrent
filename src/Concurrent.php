@@ -72,18 +72,6 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         }
     }
 
-    /**
-     * The cached value.
-     *
-     * @var TValue
-     */
-    protected mixed $value {
-        get => $this->get();
-        set {
-            $this->set($value);
-        }
-    }
-
     protected readonly ConcurrentValueValidator $validator;
 
     /**
