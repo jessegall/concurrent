@@ -140,6 +140,15 @@ $list->map(function (float &$price) {
 
 // Filter — keep items matching the predicate
 $list->filter(fn (float $price) => $price > 15.00);
+
+// Chain — multiple operations in a single lock (one read, one write)
+$list->chain()
+    ->map(fn (float $price) => $price * 1.1)
+    ->filter(fn (float $price) => $price > 15.00)
+    ->each(function (float $price) {
+        log($price);
+    })
+    ->flush();
 ```
 
 ### Wrapping any value

@@ -6,8 +6,8 @@ namespace JesseGall\Concurrent;
  * A thread-safe ordered list backed by cache.
  *
  * Allows duplicates and preserves insertion order.
- * The each() method holds the lock for the entire iteration,
- * preventing other processes from modifying the list mid-loop.
+ * The `each()`, `map()`, and `filter()` methods hold the lock for the entire operation.
+ * Use `chain()` to batch multiple operations under a single lock.
  */
 class ConcurrentList extends Concurrent
 {
@@ -74,6 +74,20 @@ class ConcurrentList extends Concurrent
     }
 
     /**
+     * Start a chain of operations that execute inside a single lock.
+     * The chain is flushed when the returned object is destroyed.
+     *
+     *   $list->chain()
+     *        ->map(fn (float $price) => $price * 1.1)
+     *        ->filter(fn (float $price) => $price > 15)
+     *        ->each(fn (float $price) => log($price));
+     */
+    public function chain(): ConcurrentListChain
+    {
+        return new ConcurrentListChain($this);
+    }
+
+    /**
      * Iterate over all items while holding the lock.
      * Return false from the callback to break early.
      *
@@ -81,15 +95,7 @@ class ConcurrentList extends Concurrent
      */
     public function each(callable $callback): void
     {
-        $this(function (array &$list) use ($callback) {
-            foreach ($list as $index => $value)
-            {
-                if ($callback($value, $index) === false)
-                {
-                    break;
-                }
-            }
-        });
+        $this->chain()->each($callback)->flush();
     }
 
     /**
@@ -105,32 +111,17 @@ class ConcurrentList extends Concurrent
      */
     public function map(callable $callback): void
     {
-        $byReference = CallableInspector::acceptsByReference($callback);
-
-        $this(function (array &$list) use ($callback, $byReference) {
-            foreach ($list as $index => &$value)
-            {
-                if ($byReference)
-                {
-                    $callback($value, $index);
-                }
-                else
-                {
-                    $value = $callback($value, $index);
-                }
-            }
-        });
+        $this->chain()->map($callback)->flush();
     }
 
     /**
      * Remove items that don't match the predicate. Re-indexes the list.
-     * The lock is held for the entire operation.
      *
      * @param  callable(mixed $value, int $index): bool  $callback
      */
     public function filter(callable $callback): void
     {
-        $this(fn (array $list) => array_values(array_filter($list, $callback, ARRAY_FILTER_USE_BOTH)));
+        $this->chain()->filter($callback)->flush();
     }
 
     /**
