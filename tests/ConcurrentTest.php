@@ -522,6 +522,47 @@ class ConcurrentTest extends TestCase
         $this->assertSame('processing', $second->status);
     }
 
+    public function test_callable_without_reference_does_not_persist_in_place_modification(): void
+    {
+        $concurrent = new Concurrent('test:no-ref', default: null, ttl: 60);
+        $concurrent(10);
+
+        // With & — modifies in-place, value persists
+        $concurrent(function (&$value) {
+            $value += 10;
+        });
+
+        $this->assertSame(20, $concurrent());
+
+        // Without & — the closure returns void (null), so the cached value
+        // is lost and falls back to the default
+        $concurrent(function ($value) {
+            $value += 10;
+        });
+
+        $this->assertNull($concurrent());
+    }
+
+    public function test_nested_array_append_via_property_proxy_does_not_persist(): void
+    {
+        $obj = new class {
+            public array $items = ['initial'];
+        };
+
+        $concurrent = new Concurrent('test:silent-fail', default: fn () => clone $obj, ttl: 60);
+
+        // __get returns a copy — PHP raises a notice and the append has no effect
+        // on the cached value
+        @($concurrent->items[] = 'should-not-persist');
+
+        $this->assertSame(['initial'], $concurrent->items);
+
+        // The correct approach: use a reference callback
+        $concurrent(fn (&$data) => $data->items[] = 'persisted');
+
+        $this->assertSame(['initial', 'persisted'], $concurrent->items);
+    }
+
     public function test_concurrent_hash_map(): void
     {
         $limiter = new TestRateLimiter;
