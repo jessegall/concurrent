@@ -58,7 +58,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
      * The cache key. When provided in the constructor, used as-is.
      * When null, auto-generated from the owning class and property name.
      */
-    public protected(set) string $key {
+    private string $key {
         get {
             if ($this->keyResolved)
             {
