@@ -25,22 +25,32 @@ class ConcurrentListChain
     /**
      * Execute all queued operations inside a single lock and write back.
      */
-    public function flush(): void
+    /**
+     * Execute all queued operations inside a single lock and write back.
+     *
+     * @return list<mixed>
+     */
+    public function flush(): array
     {
         if (empty($this->operations))
         {
-            return;
+            return ($this->list)();
         }
 
         $operations = $this->operations;
         $this->operations = [];
+        $result = [];
 
-        ($this->list)(function (array &$list) use ($operations) {
+        ($this->list)(function (array &$list) use ($operations, &$result) {
             foreach ($operations as $operation)
             {
                 $operation($list);
             }
+
+            $result = $list;
         });
+
+        return $result;
     }
 
     /**

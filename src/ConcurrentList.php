@@ -109,9 +109,12 @@ class ConcurrentList extends Concurrent
      *
      * @param  callable(mixed $value, int $index): mixed  $callback
      */
-    public function map(callable $callback): void
+    /**
+     * @return list<mixed>
+     */
+    public function map(callable $callback): array
     {
-        $this->chain()->map($callback)->flush();
+        return $this->chain()->map($callback)->flush();
     }
 
     /**
@@ -119,9 +122,12 @@ class ConcurrentList extends Concurrent
      *
      * @param  callable(mixed $value, int $index): bool  $callback
      */
-    public function filter(callable $callback): void
+    /**
+     * @return list<mixed>
+     */
+    public function filter(callable $callback): array
     {
-        $this->chain()->filter($callback)->flush();
+        return $this->chain()->filter($callback)->flush();
     }
 
     /**

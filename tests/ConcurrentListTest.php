@@ -310,6 +310,51 @@ class ConcurrentListTest extends TestCase
         $this->assertSame([], $list->all());
     }
 
+    public function test_map_returns_transformed_array(): void
+    {
+        $list = new ConcurrentList('test:list-map-return-value');
+
+        $list->add(1);
+        $list->add(2);
+        $list->add(3);
+
+        $result = $list->map(fn (int $v) => $v * 10);
+
+        $this->assertSame([10, 20, 30], $result);
+    }
+
+    public function test_filter_returns_filtered_array(): void
+    {
+        $list = new ConcurrentList('test:list-filter-return-value');
+
+        $list->add(1);
+        $list->add(2);
+        $list->add(3);
+        $list->add(4);
+
+        $result = $list->filter(fn (int $v) => $v > 2);
+
+        $this->assertSame([3, 4], $result);
+    }
+
+    public function test_chain_flush_returns_final_array(): void
+    {
+        $list = new ConcurrentList('test:list-chain-flush-return');
+
+        $list->add(1);
+        $list->add(2);
+        $list->add(3);
+        $list->add(4);
+        $list->add(5);
+
+        $result = $list->chain()
+            ->map(fn (int $v) => $v * 2)
+            ->filter(fn (int $v) => $v > 4)
+            ->flush();
+
+        $this->assertSame([6, 8, 10], $result);
+    }
+
     // ----------[ chain ]----------
 
     public function test_chain_executes_all_operations_in_single_lock(): void
