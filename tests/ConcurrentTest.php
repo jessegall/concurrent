@@ -64,6 +64,38 @@ class ConcurrentTest extends TestCase
         $this->assertSame(42, $concurrent());
     }
 
+    public function test_read_does_not_lock(): void
+    {
+        $concurrent = new Concurrent(key: 'test:read-no-lock', default: 42, ttl: 60);
+        $concurrent(42);
+
+        // Acquire the lock externally — simulates another process holding it
+        $lock = \Illuminate\Support\Facades\Cache::lock('test:read-no-lock:lock', 10);
+        $lock->get();
+
+        // Read should still work even though the lock is held
+        $result = $concurrent(fn ($value) => $value * 2, read: true);
+        $this->assertSame(84, $result);
+
+        $lock->release();
+    }
+
+    public function test_read_only_method_does_not_lock(): void
+    {
+        $concurrent = new TestReadOnlyConcurrent('test:readonly-no-lock');
+        $concurrent->setStatus('ready');
+
+        // Acquire the lock externally
+        $lock = \Illuminate\Support\Facades\Cache::lock('test:readonly-no-lock:lock', 10);
+        $lock->get();
+
+        // Read-only method should still work
+        $result = $concurrent->getStatus();
+        $this->assertSame('active', $result);
+
+        $lock->release();
+    }
+
     public function test_proxies_method_calls_to_wrapped_object(): void
     {
         $counter = new class {
