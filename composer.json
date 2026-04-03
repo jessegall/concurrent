@@ -11,7 +11,7 @@
         }
     ],
     "require": {
-        "php": "^8.2"
+        "php": "^8.4"
     },
     "suggest": {
         "illuminate/cache": "Required for the Laravel adapter (^10.0|^11.0|^12.0|^13.0)",
