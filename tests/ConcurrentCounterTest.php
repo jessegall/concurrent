@@ -2,6 +2,7 @@
 
 namespace JesseGall\Concurrent\Tests;
 
+use Illuminate\Support\Facades\Cache;
 use InvalidArgumentException;
 use JesseGall\Concurrent\ConcurrentCounter;
 
@@ -49,13 +50,40 @@ class ConcurrentCounterTest extends TestCase
         $this->assertSame(6, $counter->count());
     }
 
-    public function test_decrement_below_zero(): void
+    public function test_default_counter_clamps_at_zero(): void
     {
-        $counter = new ConcurrentCounter('test:counter-negative');
+        $counter = new ConcurrentCounter('test:counter-default-floor');
+
+        $counter->decrement(5);
+
+        $this->assertSame(0, $counter->count());
+    }
+
+    public function test_null_min_allows_negative_values(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-unbounded-below', min: null);
 
         $counter->decrement(5);
 
         $this->assertSame(-5, $counter->count());
+    }
+
+    public function test_validator_rejects_cached_value_below_min(): void
+    {
+        Cache::put('test:counter-validator-min', -10, 3600);
+
+        $counter = new ConcurrentCounter('test:counter-validator-min', min: 0, max: 100);
+
+        $this->assertSame(0, $counter->count());
+    }
+
+    public function test_validator_rejects_cached_value_above_max(): void
+    {
+        Cache::put('test:counter-validator-max', 500, 3600);
+
+        $counter = new ConcurrentCounter('test:counter-validator-max', min: 0, max: 100);
+
+        $this->assertSame(0, $counter->count());
     }
 
     public function test_reset(): void

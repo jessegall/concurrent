@@ -21,7 +21,7 @@ class ConcurrentCounter extends Concurrent
     public function __construct(
         string|null $key = null,
         int $ttl = 3600,
-        public int|null $min = null,
+        public int|null $min = 0,
         public int|null $max = null,
         public bool $wrap = false,
     ) {
@@ -43,7 +43,7 @@ class ConcurrentCounter extends Concurrent
             key: $key,
             default: $min ?? 0,
             ttl: $ttl,
-            validator: fn ($v) => is_numeric($v),
+            validator: fn (mixed $v): bool => $this->isValidValue($v),
         );
     }
 
@@ -72,7 +72,7 @@ class ConcurrentCounter extends Concurrent
     }
 
     /**
-     * Reset the counter to its starting value (the configured min, or zero).
+     * Reset the counter to its starting value (min, or zero when unbounded).
      */
     public function reset(): void
     {
@@ -80,7 +80,7 @@ class ConcurrentCounter extends Concurrent
     }
 
     /**
-     * Apply clamp or wrap semantics if bounds are configured.
+     * Apply clamp or wrap semantics for writes going through the counter.
      */
     private function applyBounds(int $value): int
     {
@@ -100,5 +100,28 @@ class ConcurrentCounter extends Concurrent
         }
 
         return $value;
+    }
+
+    /**
+     * Validator applied on every read. Out-of-range or non-numeric
+     * cached values are treated as invalid so the next read falls back
+     * to the default (min), self-healing stale or externally-written
+     * data.
+     */
+    private function isValidValue(mixed $value): bool
+    {
+        if (!is_numeric($value)) {
+            return false;
+        }
+
+        if ($this->min !== null && $value < $this->min) {
+            return false;
+        }
+
+        if ($this->max !== null && $value > $this->max) {
+            return false;
+        }
+
+        return true;
     }
 }
