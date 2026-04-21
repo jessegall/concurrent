@@ -21,9 +21,9 @@ class ConcurrentCounter extends Concurrent
     public function __construct(
         string|null $key = null,
         int $ttl = 3600,
-        public readonly int|null $min = null,
-        public readonly int|null $max = null,
-        public readonly bool $wrap = false,
+        public int|null $min = null,
+        public int|null $max = null,
+        public bool $wrap = false,
     ) {
         if ($min !== null && $max !== null && $min > $max) {
             throw new InvalidArgumentException(
