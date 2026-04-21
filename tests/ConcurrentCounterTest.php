@@ -2,6 +2,7 @@
 
 namespace JesseGall\Concurrent\Tests;
 
+use InvalidArgumentException;
 use JesseGall\Concurrent\ConcurrentCounter;
 
 class ConcurrentCounterTest extends TestCase
@@ -110,6 +111,134 @@ class ConcurrentCounterTest extends TestCase
 
         $another = new TestCounterOwner;
         $this->assertSame(3, $another->hits->count());
+    }
+
+    // ----------[ Bounds: min / max clamp ]----------
+
+    public function test_min_clamps_decrement_at_lower_bound(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-min-clamp', min: 0);
+
+        $counter->decrement(5);
+
+        $this->assertSame(0, $counter->count());
+    }
+
+    public function test_max_clamps_increment_at_upper_bound(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-max-clamp', max: 10);
+
+        $counter->increment(100);
+
+        $this->assertSame(10, $counter->count());
+    }
+
+    public function test_clamp_with_both_bounds(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-both-clamp', min: 0, max: 10);
+
+        $counter->increment(100);
+        $this->assertSame(10, $counter->count());
+
+        $counter->decrement(100);
+        $this->assertSame(0, $counter->count());
+    }
+
+    public function test_clamp_within_bounds_is_noop(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-in-range', min: 0, max: 100);
+
+        $counter->increment(42);
+
+        $this->assertSame(42, $counter->count());
+    }
+
+    public function test_default_starts_at_min_when_set(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-min-default', min: 10);
+
+        $this->assertSame(10, $counter->count());
+    }
+
+    public function test_reset_goes_to_min_when_set(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-reset-min', min: 5);
+
+        $counter->increment(20);
+        $counter->reset();
+
+        $this->assertSame(5, $counter->count());
+    }
+
+    // ----------[ Bounds: wrap / modulo ]----------
+
+    public function test_wrap_over_max_rolls_to_min(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-wrap-over', min: 0, max: 10, wrap: true);
+
+        $counter->increment(11);
+
+        $this->assertSame(0, $counter->count());
+    }
+
+    public function test_wrap_under_min_rolls_to_max(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-wrap-under', min: 0, max: 10, wrap: true);
+
+        $counter->decrement(1);
+
+        $this->assertSame(10, $counter->count());
+    }
+
+    public function test_wrap_handles_large_overflow(): void
+    {
+        // 0..5 range is 6 values; incrementing by 13 wraps 2 full cycles + 1.
+        $counter = new ConcurrentCounter('test:counter-wrap-large', min: 0, max: 5, wrap: true);
+
+        $counter->increment(13);
+
+        $this->assertSame(1, $counter->count());
+    }
+
+    public function test_wrap_with_non_zero_min(): void
+    {
+        // 5..10 range is 6 values (5,6,7,8,9,10).
+        $counter = new ConcurrentCounter('test:counter-wrap-offset', min: 5, max: 10, wrap: true);
+
+        $counter->increment(2);
+        $this->assertSame(7, $counter->count());
+
+        $counter->increment(4);
+        $this->assertSame(5, $counter->count());
+    }
+
+    public function test_wrap_requires_both_bounds(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        new ConcurrentCounter('test:counter-wrap-invalid', min: 0, wrap: true);
+    }
+
+    public function test_min_greater_than_max_throws(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        new ConcurrentCounter('test:counter-bad-bounds', min: 10, max: 5);
+    }
+
+    public function test_single_step_wrap(): void
+    {
+        // A 3-faced die: 0, 1, 2.
+        $counter = new ConcurrentCounter('test:counter-die', min: 0, max: 2, wrap: true);
+
+        $counter->increment();
+        $this->assertSame(1, $counter->count());
+
+        $counter->increment();
+        $this->assertSame(2, $counter->count());
+
+        $counter->increment();
+        $this->assertSame(0, $counter->count());
     }
 }
 

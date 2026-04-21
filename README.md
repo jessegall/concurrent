@@ -88,6 +88,27 @@ $counter->count();    // 5
 $counter->reset();
 ```
 
+**Bounds** — optional `min`, `max`, and `wrap` constrain the counter:
+
+```php
+// Clamp: values stay inside [0, 100] on every write. Going below min
+// or above max is silently pinned to the boundary.
+$clamped = new ConcurrentCounter('jobs:in-flight', min: 0, max: 100);
+$clamped->decrement(5);   // 0, not -5
+$clamped->increment(999); // 100
+
+// Wrap: modulo-style rollover (odometer / dice / circular index).
+// Requires both bounds. Inclusive on both ends.
+$dice = new ConcurrentCounter('die:face', min: 1, max: 6, wrap: true);
+$dice->increment(5);   // 6
+$dice->increment();    // 1  (wraps)
+$dice->decrement(2);   // 5  (wraps backwards)
+```
+
+With `min` set, `reset()` returns to `min` instead of `0`, and the
+default value on cache-miss is `min` (so the counter always reports a
+value inside the valid range).
+
 #### ConcurrentQueue
 
 A FIFO queue — push from one process, pop from another.
