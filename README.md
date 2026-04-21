@@ -98,11 +98,15 @@ $clamped->decrement(5);   // 0, not -5
 $clamped->increment(999); // 100
 
 // Wrap: modulo-style rollover (odometer / dice / circular index).
-// Requires both bounds. Inclusive on both ends.
+// Requires max; min defaults to 0 if omitted. Inclusive on both ends.
 $dice = new ConcurrentCounter('die:face', min: 1, max: 6, wrap: true);
 $dice->increment(5);   // 6
 $dice->increment();    // 1  (wraps)
 $dice->decrement(2);   // 5  (wraps backwards)
+
+// Zero-based wrap — the common case. Min is implicit 0.
+$cursor = new ConcurrentCounter('cursor', max: 9, wrap: true);
+$cursor->increment(11); // 1
 ```
 
 With `min` set, `reset()` returns to `min` instead of `0`, and the

@@ -25,14 +25,18 @@ class ConcurrentCounter extends Concurrent
         public int|null $max = null,
         public bool $wrap = false,
     ) {
+        if ($wrap && $max === null) {
+            throw new InvalidArgumentException('ConcurrentCounter wrap requires max.');
+        }
+
+        if ($wrap && $min === null) {
+            $this->min = $min = 0;
+        }
+
         if ($min !== null && $max !== null && $min > $max) {
             throw new InvalidArgumentException(
                 sprintf('ConcurrentCounter min (%d) must not be greater than max (%d).', $min, $max)
             );
-        }
-
-        if ($wrap && ($min === null || $max === null)) {
-            throw new InvalidArgumentException('ConcurrentCounter wrap requires both min and max.');
         }
 
         parent::__construct(

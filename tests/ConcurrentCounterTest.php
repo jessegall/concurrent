@@ -212,11 +212,25 @@ class ConcurrentCounterTest extends TestCase
         $this->assertSame(5, $counter->count());
     }
 
-    public function test_wrap_requires_both_bounds(): void
+    public function test_wrap_requires_max(): void
     {
         $this->expectException(InvalidArgumentException::class);
 
-        new ConcurrentCounter('test:counter-wrap-invalid', min: 0, wrap: true);
+        new ConcurrentCounter('test:counter-wrap-no-max', min: 0, wrap: true);
+    }
+
+    public function test_wrap_defaults_min_to_zero_when_only_max_given(): void
+    {
+        $counter = new ConcurrentCounter('test:counter-wrap-max-only', max: 5, wrap: true);
+
+        $counter->increment(6);
+        $this->assertSame(0, $counter->count());
+
+        $counter->increment(8);
+        $this->assertSame(2, $counter->count());
+
+        $counter->decrement(3);
+        $this->assertSame(5, $counter->count());
     }
 
     public function test_min_greater_than_max_throws(): void
