@@ -50,18 +50,9 @@ class ConcurrentCounterTest extends TestCase
         $this->assertSame(6, $counter->count());
     }
 
-    public function test_default_counter_clamps_at_zero(): void
+    public function test_decrement_below_zero(): void
     {
-        $counter = new ConcurrentCounter('test:counter-default-floor');
-
-        $counter->decrement(5);
-
-        $this->assertSame(0, $counter->count());
-    }
-
-    public function test_null_min_allows_negative_values(): void
-    {
-        $counter = new ConcurrentCounter('test:counter-unbounded-below', min: null);
+        $counter = new ConcurrentCounter('test:counter-negative');
 
         $counter->decrement(5);
 

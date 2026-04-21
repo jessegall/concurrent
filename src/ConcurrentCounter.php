@@ -21,7 +21,7 @@ class ConcurrentCounter extends Concurrent
     public function __construct(
         string|null $key = null,
         int $ttl = 3600,
-        public int|null $min = 0,
+        public int|null $min = null,
         public int|null $max = null,
         public bool $wrap = false,
     ) {

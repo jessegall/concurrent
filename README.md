@@ -88,23 +88,14 @@ $counter->count();    // 5
 $counter->reset();
 ```
 
-**Bounds** — optional `min`, `max`, and `wrap` constrain the counter.
-
-`min` defaults to `0`, so a plain `new ConcurrentCounter('...')` floors at
-zero. Pass `min: null` for an unbounded counter that may go negative.
+**Bounds** — optional `min`, `max`, and `wrap` constrain the counter:
 
 ```php
-// Default: floors at 0.
-$counter = new ConcurrentCounter('jobs:in-flight');
-$counter->decrement(5);   // 0, not -5
-
-// Both bounds: clamp [0, 100].
-$clamped = new ConcurrentCounter('queue:depth', min: 0, max: 100);
+// Clamp: values stay inside [0, 100] on every write. Going below min
+// or above max is silently pinned to the boundary.
+$clamped = new ConcurrentCounter('jobs:in-flight', min: 0, max: 100);
+$clamped->decrement(5);   // 0, not -5
 $clamped->increment(999); // 100
-
-// Unbounded — allow negative values.
-$delta = new ConcurrentCounter('delta', min: null);
-$delta->decrement(5);     // -5
 
 // Wrap: modulo-style rollover (odometer / dice / circular index).
 // Requires max; min defaults to 0 if omitted. Inclusive on both ends.
@@ -113,14 +104,15 @@ $dice->increment(5);   // 6
 $dice->increment();    // 1  (wraps)
 $dice->decrement(2);   // 5  (wraps backwards)
 
+// Zero-based wrap — the common case. Min is implicit 0.
 $cursor = new ConcurrentCounter('cursor', max: 9, wrap: true);
 $cursor->increment(11); // 1
 ```
 
-Bounds also act as a read-time validator: any cached value outside the
-range (from external writes, schema drift, etc.) is treated as invalid
-and the counter self-heals by falling back to `min`. `reset()` returns
-to `min` (or `0` if unbounded).
+With bounds set, they also act as a read-time validator: any cached
+value outside the range (from external writes, schema drift, etc.) is
+treated as invalid and the counter self-heals by falling back to `min`.
+`reset()` returns to `min` when set, otherwise `0`.
 
 #### ConcurrentQueue
 
