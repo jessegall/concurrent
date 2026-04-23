@@ -17,8 +17,9 @@ class LaravelCache implements CacheDriver
         return $this->repository()->get($key, $default);
     }
 
-    public function put(string $key, mixed $value, int $ttl): void
+    public function put(string $key, mixed $value, int|null $ttl): void
     {
+        // Laravel's Cache::put interprets a null TTL as "store forever".
         $this->repository()->put($key, $value, $ttl);
     }
 

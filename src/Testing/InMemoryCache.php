@@ -14,7 +14,7 @@ class InMemoryCache implements CacheDriver
         return $this->store[$key] ?? (is_callable($default) ? $default() : $default);
     }
 
-    public function put(string $key, mixed $value, int $ttl): void
+    public function put(string $key, mixed $value, int|null $ttl): void
     {
         $this->store[$key] = $value;
     }

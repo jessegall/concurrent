@@ -897,7 +897,7 @@ class LoggingCache implements \JesseGall\Concurrent\Contracts\CacheDriver
         return $this->inner->get($key, $default);
     }
 
-    public function put(string $key, mixed $value, int $ttl): void
+    public function put(string $key, mixed $value, int|null $ttl): void
     {
         $this->log[] = ['op' => 'put', 'key' => $key];
         $this->inner->put($key, $value, $ttl);

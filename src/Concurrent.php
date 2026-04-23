@@ -52,9 +52,10 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     private readonly mixed $default;
 
     /**
-     * Cache TTL in seconds.
+     * Cache TTL in seconds. Null stores forever — the value lives in
+     * cache until something explicitly forgets it.
      */
-    private readonly int $ttl;
+    private readonly int|null $ttl;
 
     /**
      * Maximum seconds a distributed lock is held before auto-release.
@@ -114,7 +115,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     /**
      * @param string|null $key Explicit cache key. When null, auto-generated from the owning class and property name.
      * @param TValue|callable(): TValue $default Default value on cache miss. Callables are resolved lazily.
-     * @param int $ttl Cache TTL in seconds.
+     * @param int|null $ttl Cache TTL in seconds. Null (the default) stores forever — cache-until-forgotten.
      * @param callable(TValue): bool|null $validator Optional validator. Rejects invalid writes (throws) and invalid reads (falls back to default).
      * @param Cache|null $cache Cache backend. When null, resolved from Laravel's container.
      * @param Lock|null $lock Lock backend. When null, resolved from Laravel's container.
@@ -123,7 +124,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     public function __construct(
         string|null      $key = null,
         mixed            $default = null,
-        int              $ttl = 300,
+        int|null         $ttl = null,
         callable|null    $validator = null,
         CacheDriver|null $cache = null,
         LockDriver|null  $lock = null,
