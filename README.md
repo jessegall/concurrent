@@ -4,21 +4,7 @@ Thread-safe shared state for PHP. Wrap any value — objects, arrays, scalars �
 
 Ships with ready-to-use data structures: `ConcurrentMap`, `ConcurrentSet`, `ConcurrentCounter`, `ConcurrentQueue`, and `ConcurrentList`.
 
-## Why?
-
-When multiple processes (web requests, queue workers, cron jobs) need to share state, you end up scattering cache calls across your codebase — duplicated key strings, no locking, race conditions on read-modify-write, and business logic tangled with cache mechanics.
-
-**Concurrent** wraps any value in a thread-safe proxy. You interact with it normally — method calls, property access, array operations — and the wrapper handles locking and persistence. Reads never lock. Writes are atomic.
-
-## Installation
-
-```bash
-composer require jessegall/concurrent
-```
-
-## Quick Start
-
-### Built-in data structures
+## Built-in Data Structures
 
 The package ships with thread-safe data structures. Pass a `key` for standalone use, or create inside a class constructor without a key to auto-generate it from the class and property name:
 
@@ -36,7 +22,7 @@ class MyService
 }
 ```
 
-#### ConcurrentMap
+### ConcurrentMap
 
 A key-value map — like Java's `ConcurrentMap` or Go's `sync.Map`.
 
@@ -53,7 +39,7 @@ $map->remove('dark-mode');
 $map->all();                     // []
 ```
 
-#### ConcurrentSet
+### ConcurrentSet
 
 A collection of unique values — duplicates are ignored.
 
@@ -72,7 +58,7 @@ $set->remove('bob');
 $set->clear();
 ```
 
-#### ConcurrentCounter
+### ConcurrentCounter
 
 An atomic counter — safe increment/decrement across processes.
 
@@ -114,7 +100,7 @@ value outside the range (from external writes, schema drift, etc.) is
 treated as invalid and the counter self-heals by falling back to `min`.
 `reset()` returns to `min` when set, otherwise `0`.
 
-#### ConcurrentQueue
+### ConcurrentQueue
 
 A FIFO queue — push from one process, pop from another.
 
@@ -133,7 +119,7 @@ $queue->isEmpty();  // false
 $queue->clear();
 ```
 
-#### ConcurrentList
+### ConcurrentList
 
 An ordered list — allows duplicates, preserves insertion order. All methods are chainable.
 
@@ -179,7 +165,19 @@ $prices = $list->chain()
      ->flush();
 ```
 
-### Wrapping any value
+## Why?
+
+When multiple processes (web requests, queue workers, cron jobs) need to share state, you end up scattering cache calls across your codebase — duplicated key strings, no locking, race conditions on read-modify-write, and business logic tangled with cache mechanics.
+
+**Concurrent** wraps any value in a thread-safe proxy. You interact with it normally — method calls, property access, array operations — and the wrapper handles locking and persistence. Reads never lock. Writes are atomic.
+
+## Installation
+
+```bash
+composer require jessegall/concurrent
+```
+
+## Wrapping Any Value
 
 Turning any value into a concurrent value is as simple as wrapping it in a `Concurrent` instance. Method calls, property access, array operations — everything is proxied through the cache with locking.
 
@@ -194,7 +192,7 @@ $cart = new Concurrent(
 );
 
 $cart->addItem('T-Shirt', 2);  // method call (locks, writes back)
-echo $cart->itemCount();       // method call (locks, writes back — use DeclaresReadOnlyMethods to skip)
+echo $cart->itemCount();       // method call (locks — see "Read-only methods" to skip)
 echo count($cart->items);      // property read (no lock)
 ```
 
@@ -207,53 +205,83 @@ $counter();                              // get (no lock)
 $counter(42);                            // set (locks)
 $counter(fn ($current) => $current + 1); // atomic update (locks)
 $counter(null);                          // forget (locks)
-
-// Reference parameters — modify directly, no return needed:
-$counter(function (int &$value) {
-    $value += 10;
-});
-
 ```
 
-### Reference vs return
+### Atomic updates — three callback styles
 
-When invoking with a callable, there are two ways to persist changes:
+When you pass a closure to `$concurrent(...)`, the wrapper runs it inside a single lock and persists the result. There are three styles, all atomic:
 
 ```php
-// With & — modify in-place. The return value of the callable is ignored,
-// only the modified reference is persisted:
+// 1. Bound $this — zero-param closure. $this is the Concurrent itself,
+//    so property writes and method calls route through the proxy under
+//    the same lock (re-entrant — no extra lock acquisitions).
+$concurrent(function () {
+    $this->count++;
+    $this->status = 'processing';
+    $this->bump();
+});
+
+// 2. Reference parameter — modify in place, no return needed.
 $concurrent(fn (&$data) => $data->count++);
-$concurrent(fn (&$data) => $data[] = 'item');
-
-// Without & — the returned value becomes the new cached value:
-$concurrent(fn ($data) => $data + 1);
-$concurrent(function ($data) {
-    $data->count++;
-    return $data;
+$concurrent(function (SessionData &$data) {
+    $data->total = 100;
+    $data->status = 'processing';
 });
+
+// 3. Return-style — receive the value, return the new one.
+$concurrent(fn ($data) => $data + 1);
 ```
 
-Use `&` when modifying objects or arrays in-place. Use return when computing a new value (like incrementing a scalar).
+**`$concurrent->count++` outside a callback is _not_ atomic** — it's a read (`__get`, no lock) followed by a write (`__set`, locks). Another process can write in between. For safe increments, use a callback (any of the three styles above).
 
-**Note:** `$concurrent->count++` is **not atomic** — it's a read (`__get`, no lock) followed by a write (`__set`, locks). Another process can write in between. For safe increments, use a reference callback:
+Similarly, nested modifications like `$concurrent->items[] = 'x'` silently fail because `__get` returns a copy. Use a callback:
 
 ```php
-$concurrent(fn (&$data) => $data->count++); // atomic
+$concurrent(function () { $this->items[] = 'x'; });    // ✓ bound
+$concurrent(fn (&$d) => $d->items[] = 'x');            // ✓ reference
 ```
 
-Similarly, nested modifications like `$concurrent->items[] = 'x'` silently fail because `__get` returns a copy. Use a reference callback:
+## Read-only Methods
+
+Method calls on a wrapped value lock + write back by default. For pure accessors, declare them read-only so they skip the lock entirely. Two ways to do it:
+
+**Per-method attribute** — mark methods on the wrapped value's class:
 
 ```php
-$concurrent(fn (&$data) => $data->items[] = 'x');
+use JesseGall\Concurrent\Attributes\ReadonlyMethod;
+
+class CartData
+{
+    public array $items = [];
+
+    #[ReadonlyMethod]
+    public function total(): int { /* pure */ }
+}
 ```
+
+**Class-level interface** — list method names on the Concurrent subclass:
+
+```php
+use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
+
+class Cart extends Concurrent implements DeclaresReadOnlyMethods
+{
+    public static function readOnlyMethods(): array
+    {
+        return ['total', 'itemCount'];
+    }
+}
+```
+
+Either way, the method skips locking and isn't written back. If a read-only method actually mutates the wrapped value, a `ReadonlyViolationException` is thrown — silently-discarded writes would otherwise be a confusing class of bug.
 
 ## Writing Your Own Concurrent Class
 
-Extend `Concurrent` to encapsulate the key, default, TTL, and domain methods. Use reference parameters (`&$data`) for atomic multi-field updates, or property proxy for simple writes:
+Extend `Concurrent` to encapsulate the key, default, TTL, and domain methods:
 
 ```php
+use JesseGall\Concurrent\Attributes\ReadonlyMethod;
 use JesseGall\Concurrent\Concurrent;
-use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
 
 class SessionData
 {
@@ -262,6 +290,7 @@ class SessionData
     public string $status = 'pending';
     public array $errors = [];
 
+    #[ReadonlyMethod]
     public function getProgress(): int
     {
         return $this->total > 0
@@ -273,7 +302,7 @@ class SessionData
 /**
  * @mixin SessionData
  */
-class ProcessingSession extends Concurrent implements DeclaresReadOnlyMethods
+class ProcessingSession extends Concurrent
 {
     public function __construct(string $id)
     {
@@ -285,34 +314,28 @@ class ProcessingSession extends Concurrent implements DeclaresReadOnlyMethods
         );
     }
 
-    // Read-only methods skip locking (optional optimization)
-    public static function readOnlyMethods(): array
-    {
-        return ['getProgress'];
-    }
-
-    // Reference parameter — atomic multi-field update
+    // Bound $this — multiple mutations under one lock.
     public function start(int $total): void
     {
-        $this(function (SessionData &$data) use ($total) {
-            $data->total = $total;
-            $data->status = 'processing';
+        $this(function () use ($total) {
+            $this->total = $total;
+            $this->status = 'processing';
         });
     }
 
-    // Invoke with & — atomic increment
+    // Reference parameter — atomic increment.
     public function advance(): void
     {
         $this(fn (SessionData &$data) => $data->processed++);
     }
 
-    // Reference — array append
+    // Reference — array append.
     public function addError(string $message): void
     {
         $this(fn (SessionData &$data) => $data->errors[] = $message);
     }
 
-    // Property proxy — simple overwrite
+    // Property proxy — simple overwrite.
     public function complete(): void
     {
         $this->status = 'completed';
@@ -325,10 +348,121 @@ $session = new ProcessingSession($uploadId);
 $session->start(1000);
 $session->advance();
 $session->addError('Row 42: Invalid email');
-$session->getProgress();  // 0 (read-only, no lock)
+$session->getProgress();  // read-only, no lock
 $session->status;         // "processing"
 $session->complete();
 ```
+
+## Helper Traits
+
+### WithAccessors — get / set / has / update
+
+Adds private `get`, `set`, `has`, and `update` helpers for use inside a subclass. These are intentional building blocks for domain methods, so they're private by default. Override visibility per-method when you want to expose them.
+
+```php
+use JesseGall\Concurrent\Concurrent;
+use JesseGall\Concurrent\WithAccessors;
+
+class FeatureFlags extends Concurrent
+{
+    use WithAccessors;
+
+    public function __construct() {
+        parent::__construct(key: 'feature-flags', default: fn () => []);
+    }
+
+    public function enable(string $name): void
+    {
+        $this->set($name, true);
+    }
+
+    public function isEnabled(string $name): bool
+    {
+        return (bool) $this->get($name, false);
+    }
+
+    public function toggle(string $name): void
+    {
+        $this->update(function () use ($name) {
+            $this->{$name} = ! ($this->{$name} ?? false);
+        });
+    }
+}
+```
+
+Need them as part of the public API? Use PHP's trait conflict resolution:
+
+```php
+class KeyValueStore extends Concurrent
+{
+    use WithAccessors {
+        get as public;
+        set as public;
+        has as public;
+        update as public;
+    }
+}
+```
+
+`update(Closure $fn)` accepts any of the three callback styles (bound `$this`, reference parameter, return-style) — it just delegates to `__invoke`.
+
+### WithPointer — track "the current" instance
+
+Some Concurrent classes are per-run or per-session — a fresh ID minted each time, with a side pointer that remembers which one is "current." `WithPointer` packages that pattern. Subclasses implement `fromPointerId()` (since Concurrent constructors can have any shape), and get `start()` / `current()` / `release()` for free.
+
+```php
+use JesseGall\Concurrent\Concurrent;
+use JesseGall\Concurrent\WithPointer;
+
+final class CurrentImport extends Concurrent
+{
+    use WithPointer;
+
+    public function __construct(public readonly string $runId)
+    {
+        parent::__construct(
+            key: "import:{$runId}",
+            default: fn () => new ImportData,
+        );
+    }
+
+    protected static function fromPointerId(string $id, mixed ...$args): static
+    {
+        return new static($id);
+    }
+}
+
+CurrentImport::start();        // mint a new run, claim the pointer
+CurrentImport::current();      // resolve the pointed-to instance, or null
+CurrentImport::release();      // clear the pointer
+```
+
+Constructor takes more than just the ID? Pass the extras through `start()` / `current()` and reorder them inside `fromPointerId()`:
+
+```php
+final class TenantedImport extends Concurrent
+{
+    use WithPointer;
+
+    public function __construct(
+        public readonly string $tenant,
+        public readonly string $runId,
+    ) { /* ... */ }
+
+    protected static function fromPointerId(string $id, mixed ...$args): static
+    {
+        // $id = runId; $args[0] = tenant
+        return new static($args[0], $id);
+    }
+}
+
+TenantedImport::start('acme');     // mint a new runId for tenant "acme"
+TenantedImport::current('acme');   // resolve, supplying the tenant
+```
+
+Override hooks: `pointerKey()` for a stable, class-name-independent key; `generateId()` to plug in UUIDs/ULIDs/anything.
+
+For ad-hoc usage without the trait, use `ConcurrentPointer` directly — it's a `Concurrent<string|null>` with a factory closure.
 
 ## Using Without Laravel
 
@@ -400,20 +534,22 @@ With Laravel, no setup needed — the service provider auto-registers the cache 
 4. Modified value **written back to cache**
 5. **Lock released**
 
-Read operations — `$concurrent()`, `$concurrent->property`, `isset()`, and methods declared as read-only via `DeclaresReadOnlyMethods` — read directly from cache without locking. This means reads never block, even when another process is writing.
+Read operations — `$concurrent()`, `$concurrent->property`, `isset()`, and methods declared as read-only via `#[ReadonlyMethod]` or `DeclaresReadOnlyMethods` — read directly from cache without locking. This means reads never block, even when another process is writing.
+
+Locks are **re-entrant**: nested writes inside a callback (e.g. `$this->prop = X` inside a bound `$this` closure) reuse the outer lock instead of acquiring a new one, so the entire callback runs as a single atomic operation.
 
 ### When to invoke vs property proxy
 
 | Operation | Use | Example |
 |---|---|---|
 | Simple overwrite | Property proxy | `$this->status = 'done'` |
-| Increment / decrement | Invoke with `&` | `$this(fn (&$d) => $d->count++)` |
-| Update multiple fields | Invoke with `&` | `$this(fn (&$d) => ...)` |
+| Increment / decrement | Invoke with `&` or bound `$this` | `$this(fn (&$d) => $d->count++)` |
+| Update multiple fields | Invoke with `&` or bound `$this` | `$this(function () { $this->a = 1; $this->b = 2; })` |
 | Append to array | Invoke with `&` | `$this(fn (&$d) => $d->items[] = ...)` |
 
 ## Requirements
 
-- PHP 8.2+
+- PHP 8.4+
 - Any cache backend (Redis recommended)
 - Laravel 10–13 supported out of the box (optional — works without Laravel via custom `CacheDriver` and `LockDriver` implementations)
 

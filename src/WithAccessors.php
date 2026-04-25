@@ -19,10 +19,6 @@ use Closure;
  *         update as public;
  *     }
  *
- * Routing: $this->{$key} goes through Concurrent's __get/__set/__isset, so
- * reads and writes hit the wrapped value (with locking on writes). If the
- * subclass declares a real property with the same name, that property is
- * accessed directly — real properties take precedence over wrapped lookup.
  */
 trait WithAccessors
 {
@@ -54,12 +50,6 @@ trait WithAccessors
 
     /**
      * Run a closure as an atomic update of the wrapped value.
-     *
-     * Delegates to __invoke, so all callback styles work:
-     *   - Zero-param closure: $this is bound to the Concurrent; mutate via
-     *     proxy methods or return a value to store.
-     *   - Param closure: receives the wrapped value, returns the new state.
-     *   - By-reference param: mutates the value in place.
      */
     private function update(Closure $fn): void
     {
