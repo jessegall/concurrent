@@ -85,6 +85,17 @@ class ThisBindingTest extends TestCase
         $this->assertSame(2, $concurrent->count);
     }
 
+    public function test_self_const_resolves_to_lexical_scope_inside_bound_closure(): void
+    {
+        // Closures defined inside a method retain their lexical scope, so
+        // self::, parent::, and static:: must keep working after we rebind.
+        $instance = new ThisBindingScopeSubclass('test:this-binding:scope');
+
+        $instance->captureConstantViaSelf();
+
+        $this->assertSame('expected-value', $instance->captured);
+    }
+
     public function test_method_missing_from_data_falls_back_to_wrapper(): void
     {
         // wrapperOnly() is a method on the Concurrent subclass, not on the data.
@@ -438,6 +449,33 @@ class ThisBindingArrayHolder
 
     /** @var array<string, list<string>> */
     public array $rejectionsByReason = [];
+}
+
+class ThisBindingScopeSubclassData
+{
+    public string $captured = '';
+}
+
+class ThisBindingScopeSubclass extends Concurrent
+{
+    private const string EXPECTED = 'expected-value';
+
+    public function __construct(string $key)
+    {
+        parent::__construct(
+            key: $key,
+            default: fn () => new ThisBindingScopeSubclassData,
+            ttl: 60,
+        );
+    }
+
+    public function captureConstantViaSelf(): void
+    {
+        $this(function () {
+            // self:: must still resolve to ThisBindingScopeSubclass after rebinding.
+            $this->captured = self::EXPECTED;
+        });
+    }
 }
 
 class SubclassWithWrapperMethodData

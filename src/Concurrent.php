@@ -349,7 +349,11 @@ class Concurrent implements ArrayAccess, IteratorAggregate
             if ($this->shouldBindThis($value)) {
                 $target = $this->get();
                 $proxy = new BoundProxy($target, $this);
-                $bound = Closure::bind($value, $proxy, null);
+
+                // Preserve the closure's lexical scope so self::, parent::, and
+                // static:: keep resolving inside the body.
+                $scope = (new ReflectionFunction($value))->getClosureScopeClass()?->getName();
+                $bound = Closure::bind($value, $proxy, $scope);
 
                 $snapshot = serialize($target);
                 $result = $bound();

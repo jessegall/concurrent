@@ -107,6 +107,44 @@ class WithAccessorsTest extends TestCase
         $this->assertSame(33, $instance->count);
     }
 
+    // ----------[ clear ]----------
+
+    public function test_clear_forgets_the_value(): void
+    {
+        $instance = new BasicAccessorsTarget('test:wa:clear');
+        $instance->doSet('count', 99);
+        $this->assertSame(99, $instance->count);
+
+        $instance->doClear();
+
+        // After clear, next read returns the default (count = 0).
+        $this->assertSame(0, $instance->count);
+    }
+
+    // ----------[ chaining ]----------
+
+    public function test_set_update_clear_return_static_for_chaining(): void
+    {
+        // Use the public-visibility variant so we can call directly off the instance.
+        $instance = new PublicAccessorsTarget('test:wa:chain');
+
+        $returned = $instance->set('count', 1);
+        $this->assertSame($instance, $returned);
+
+        $returned = $instance->update(function () {
+            /** @var PublicAccessorsTarget $this */
+            $this->count = 5;
+        });
+        $this->assertSame($instance, $returned);
+
+        // Full chain.
+        $instance->set('count', 10)->update(function () {
+            /** @var PublicAccessorsTarget $this */
+            $this->count++;
+        });
+        $this->assertSame(11, $instance->get('count'));
+    }
+
     public function test_update_calls_are_atomic(): void
     {
         // Concurrent's __invoke routes through lock()->set, which uses the
@@ -136,7 +174,7 @@ class WithAccessorsTest extends TestCase
         // "private method" error — Concurrent's __call swallows them and
         // forwards to the wrapped value, which then fails with "undefined
         // method." Reflection asserts the actual visibility cleanly.)
-        foreach (['get', 'set', 'has', 'update'] as $method) {
+        foreach (['get', 'set', 'has', 'update', 'clear'] as $method) {
             $reflection = new \ReflectionMethod(BasicAccessorsTarget::class, $method);
             $this->assertTrue(
                 $reflection->isPrivate(),
@@ -150,7 +188,7 @@ class WithAccessorsTest extends TestCase
         $instance = new PublicAccessorsTarget('test:wa:public');
 
         // Visibility check via reflection.
-        foreach (['get', 'set', 'has', 'update'] as $method) {
+        foreach (['get', 'set', 'has', 'update', 'clear'] as $method) {
             $reflection = new \ReflectionMethod(PublicAccessorsTarget::class, $method);
             $this->assertTrue(
                 $reflection->isPublic(),
@@ -179,7 +217,7 @@ class WithAccessorsTest extends TestCase
             'get() should be public via override'
         );
 
-        foreach (['set', 'has', 'update'] as $method) {
+        foreach (['set', 'has', 'update', 'clear'] as $method) {
             $this->assertTrue(
                 (new \ReflectionMethod(PartiallyPublicTarget::class, $method))->isPrivate(),
                 "{$method}() should remain private"
@@ -256,6 +294,11 @@ class BasicAccessorsTarget extends Concurrent
     {
         $this->update($fn);
     }
+
+    public function doClear(): void
+    {
+        $this->clear();
+    }
 }
 
 class PublicAccessorsData
@@ -270,6 +313,7 @@ class PublicAccessorsTarget extends Concurrent
         set as public;
         has as public;
         update as public;
+        clear as public;
     }
 
     public function __construct(string $key)

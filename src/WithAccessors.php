@@ -35,9 +35,11 @@ trait WithAccessors
      * Write a key on the wrapped value (or a real property on the subclass).
      * Goes through Concurrent's __set, which acquires the lock and writes back.
      */
-    private function set(string $key, mixed $value): void
+    private function set(string $key, mixed $value): static
     {
         $this->{$key} = $value;
+
+        return $this;
     }
 
     /**
@@ -51,8 +53,20 @@ trait WithAccessors
     /**
      * Run a closure as an atomic update of the wrapped value.
      */
-    private function update(Closure $fn): void
+    private function update(Closure $fn): static
     {
         $this($fn);
+
+        return $this;
+    }
+
+    /**
+     * Forget the wrapped value — next read returns the default.
+     */
+    private function clear(): static
+    {
+        $this(null);
+
+        return $this;
     }
 }
