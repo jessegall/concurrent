@@ -15,6 +15,13 @@ final class BoundProxy
     private mixed $data;
     private Concurrent $wrapper;
 
+    /**
+     * Set when the user touches the wrapped data through the proxy (read,
+     * write, unset, or method call on data). Concurrent::set() reads this
+     * to decide whether to write the (possibly mutated) target back, since
+     * &__get-returned references can be mutated without us seeing it.
+     */
+    public bool $touchedData = false;
 
     public function __construct(mixed &$data, Concurrent $wrapper)
     {
@@ -25,10 +32,14 @@ final class BoundProxy
     public function &__get(string $name): mixed
     {
         if (is_object($this->data) && property_exists($this->data, $name)) {
+            $this->touchedData = true;
+
             return $this->data->{$name};
         }
 
         if (is_array($this->data) && array_key_exists($name, $this->data)) {
+            $this->touchedData = true;
+
             return $this->data[$name];
         }
 
@@ -38,12 +49,14 @@ final class BoundProxy
     public function __set(string $name, mixed $value): void
     {
         if (is_object($this->data)) {
+            $this->touchedData = true;
             $this->data->{$name} = $value;
 
             return;
         }
 
         if (is_array($this->data)) {
+            $this->touchedData = true;
             $this->data[$name] = $value;
 
             return;
@@ -68,12 +81,14 @@ final class BoundProxy
     public function __unset(string $name): void
     {
         if (is_object($this->data) && property_exists($this->data, $name)) {
+            $this->touchedData = true;
             unset($this->data->{$name});
 
             return;
         }
 
         if (is_array($this->data) && array_key_exists($name, $this->data)) {
+            $this->touchedData = true;
             unset($this->data[$name]);
 
             return;
@@ -85,6 +100,8 @@ final class BoundProxy
     public function __call(string $name, array $arguments): mixed
     {
         if (is_object($this->data) && method_exists($this->data, $name)) {
+            $this->touchedData = true;
+
             return $this->data->{$name}(...$arguments);
         }
 

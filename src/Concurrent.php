@@ -355,17 +355,22 @@ class Concurrent implements ArrayAccess, IteratorAggregate
                 $scope = (new ReflectionFunction($value))->getClosureScopeClass()?->getName();
                 $bound = Closure::bind($value, $proxy, $scope);
 
-                $snapshot = serialize($target);
                 $result = $bound();
 
-                if ($result !== null) {
-                    $value = $result;
-                } elseif (serialize($target) !== $snapshot) {
+                if ($proxy->touchedData) {
+                    // Closure read/wrote the data through the proxy — use the
+                    // (possibly mutated) target. Takes priority over $result
+                    // so arrow fns like `fn () => $this->prop = X` work: the
+                    // assignment returns the assigned value, but we want the
+                    // mutated target, not the scalar.
                     $value = $target;
+                } elseif ($result !== null) {
+                    // No data access — explicit return is the new state.
+                    $value = $result;
                 } else {
-                    // Closure didn't mutate $target directly — any state changes
-                    // came from re-entrant writes via the wrapper, which already
-                    // wrote to cache. Skip the auto-write so we don't clobber them.
+                    // No data access, no return — state changes came from
+                    // re-entrant wrapper writes that already wrote to cache.
+                    // Skip the auto-write so we don't clobber them.
                     return;
                 }
             } elseif ($this->acceptsByReference($value)) {

@@ -242,6 +242,55 @@ class ThisBindingTest extends TestCase
         $this->assertSame(['fresh'], $concurrent());
     }
 
+    public function test_arrow_with_by_reference_param_works(): void
+    {
+        // Arrow fns can be used for the by-ref style — they don't rely on
+        // $this rebinding. Useful for terse one-liners.
+        $concurrent = new Concurrent(
+            key: 'test:this-binding:arrow-byref',
+            default: fn () => new ThisBindingArrayHolder,
+            ttl: 60,
+        );
+
+        $concurrent(fn (ThisBindingArrayHolder &$d) => $d->affected[] = ['row' => 1]);
+        $concurrent(fn (ThisBindingArrayHolder &$d) => $d->affected[] = ['row' => 2]);
+
+        $this->assertCount(2, $concurrent->affected);
+    }
+
+    public function test_arrow_with_zero_params_rebinds_this_to_proxy(): void
+    {
+        // PHP 8.4+ rebinds arrow functions via Closure::bind, so $this inside
+        // a zero-param arrow becomes the BoundProxy just like a regular closure.
+        $instance = new ArrowProbe('test:this-binding:arrow-probe');
+
+        $captured = $instance->probeArrow();
+
+        $this->assertInstanceOf(\JesseGall\Concurrent\BoundProxy::class, $captured);
+    }
+
+    public function test_arrow_with_zero_params_can_mutate_via_assignment(): void
+    {
+        // The set() priority-flip lets arrow fns work for bound mutations:
+        // `fn () => $this->prop = X` mutates the target via the proxy, and
+        // the assignment-expression's return value is intentionally ignored
+        // so we don't overwrite the data with the assigned scalar.
+        $concurrent = new Concurrent(
+            key: 'test:this-binding:arrow-mutate',
+            default: fn () => new ThisBindingArrayHolder,
+            ttl: 60,
+        );
+
+        // $this in the arrow auto-captures the test instance; Closure::bind
+        // then rebinds it to the BoundProxy. So `$this->counts['ok'] = 1` is
+        // routed through the proxy's &__get and lands on the wrapped data.
+        $concurrent(fn () => $this->counts['ok'] = 1);
+        $concurrent(fn () => $this->affected[] = ['row' => 1]);
+
+        $this->assertSame(['ok' => 1], $concurrent->counts);
+        $this->assertSame([['row' => 1]], $concurrent->affected);
+    }
+
     public function test_static_closure_falls_through_to_return_style(): void
     {
         $concurrent = new Concurrent(
@@ -475,6 +524,31 @@ class ThisBindingScopeSubclass extends Concurrent
             // self:: must still resolve to ThisBindingScopeSubclass after rebinding.
             $this->captured = self::EXPECTED;
         });
+    }
+}
+
+class ArrowProbe extends Concurrent
+{
+    public function __construct(string $key)
+    {
+        parent::__construct(
+            key: $key,
+            default: fn () => new \stdClass,
+            ttl: 60,
+        );
+    }
+
+    public function probeArrow(): ?object
+    {
+        // Capture $this from inside an arrow function. If Closure::bind in
+        // Concurrent::set() actually rebound the arrow, $this would be the
+        // BoundProxy. PHP doesn't allow rebinding arrows, so $this stays
+        // as the lexical scope ($this here = the ArrowProbe instance).
+        $container = new \stdClass;
+        $arrow = fn () => $container->capturedThis = $this;
+        $this($arrow);
+
+        return $container->capturedThis;
     }
 }
 

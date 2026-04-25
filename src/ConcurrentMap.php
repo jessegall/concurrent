@@ -33,7 +33,7 @@ class ConcurrentMap extends Concurrent
      */
     public function set(string $key, mixed $value): void
     {
-        $this(fn (array &$map) => $map[$key] = $value);
+        $this(fn () => $this->{$key} = $value);
     }
 
     /**
@@ -41,9 +41,7 @@ class ConcurrentMap extends Concurrent
      */
     public function remove(string $key): void
     {
-        $this(function (array &$map) use ($key) {
-            unset($map[$key]);
-        });
+        $this(function () use ($key) { unset($this->{$key}); });
     }
 
     /**
