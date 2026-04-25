@@ -6,20 +6,97 @@ use JesseGall\Concurrent\Concurrent;
 
 class ThisBindingTest extends TestCase
 {
-    public function test_zero_param_closure_binds_this_to_concurrent_instance(): void
+    public function test_array_element_write_on_object_property(): void
     {
+        // The bug report scenario: $this->arrayProp['key'] = X used to fail
+        // with "Indirect modification of overloaded property" when $this was
+        // bound to the wrapper. With the BoundProxy + &__get, it works.
         $concurrent = new Concurrent(
-            key: 'test:this-binding:identity',
-            default: fn () => new ThisBindingData,
+            key: 'test:this-binding:array-element-write',
+            default: fn () => new ThisBindingArrayHolder,
             ttl: 60,
         );
 
-        $captured = null;
-        $concurrent(function () use (&$captured) {
-            $captured = $this;
+        $concurrent(function () {
+            /** @var ThisBindingArrayHolder $this */
+            $this->counts['ok'] = 1;
+            $this->counts['fail'] = 2;
         });
 
-        $this->assertSame($concurrent, $captured);
+        $this->assertSame(['ok' => 1, 'fail' => 2], $concurrent->counts);
+    }
+
+    public function test_array_append_on_object_property(): void
+    {
+        // Second bug report scenario: $this->arrayProp[] = X.
+        $concurrent = new Concurrent(
+            key: 'test:this-binding:array-append',
+            default: fn () => new ThisBindingArrayHolder,
+            ttl: 60,
+        );
+
+        $concurrent(function () {
+            /** @var ThisBindingArrayHolder $this */
+            $this->affected[] = ['row' => 1, 'reason' => 'duplicate'];
+            $this->affected[] = ['row' => 2, 'reason' => 'invalid'];
+        });
+
+        $this->assertCount(2, $concurrent->affected);
+        $this->assertSame(['row' => 1, 'reason' => 'duplicate'], $concurrent->affected[0]);
+        $this->assertSame(['row' => 2, 'reason' => 'invalid'], $concurrent->affected[1]);
+    }
+
+    public function test_nested_array_element_write(): void
+    {
+        // Three levels of nesting — the &__get reference must thread all the way down.
+        $concurrent = new Concurrent(
+            key: 'test:this-binding:nested-array-write',
+            default: fn () => new ThisBindingArrayHolder,
+            ttl: 60,
+        );
+
+        $concurrent(function () {
+            /** @var ThisBindingArrayHolder $this */
+            $this->rejectionsByReason['duplicate'][] = 'row-1';
+            $this->rejectionsByReason['duplicate'][] = 'row-2';
+            $this->rejectionsByReason['invalid'][] = 'row-3';
+        });
+
+        $this->assertSame(
+            ['duplicate' => ['row-1', 'row-2'], 'invalid' => ['row-3']],
+            $concurrent->rejectionsByReason,
+        );
+    }
+
+    public function test_method_call_on_data_routes_to_data(): void
+    {
+        $concurrent = new Concurrent(
+            key: 'test:this-binding:method-on-data',
+            default: fn () => new ThisBindingDataWithMethods,
+            ttl: 60,
+        );
+
+        $concurrent(function () {
+            /** @var ThisBindingDataWithMethods $this */
+            $this->bump();
+            $this->bump();
+        });
+
+        $this->assertSame(2, $concurrent->count);
+    }
+
+    public function test_method_missing_from_data_falls_back_to_wrapper(): void
+    {
+        // wrapperOnly() is a method on the Concurrent subclass, not on the data.
+        // The proxy must route the call through to the wrapper.
+        $concurrent = new SubclassWithWrapperMethod('test:this-binding:wrapper-fallback');
+
+        $concurrent(function () {
+            /** @var SubclassWithWrapperMethod $this */
+            $this->wrapperOnly('hello-from-wrapper');
+        });
+
+        $this->assertSame('hello-from-wrapper', $concurrent->label);
     }
 
     public function test_property_writes_via_this_route_through_proxy(): void
@@ -348,5 +425,39 @@ class ThisBindingSubclass extends Concurrent
             $this->count++;
             $this->status = $status;
         });
+    }
+}
+
+class ThisBindingArrayHolder
+{
+    /** @var array<string, int> */
+    public array $counts = [];
+
+    /** @var list<array{row: int, reason: string}> */
+    public array $affected = [];
+
+    /** @var array<string, list<string>> */
+    public array $rejectionsByReason = [];
+}
+
+class SubclassWithWrapperMethodData
+{
+    public string $label = '';
+}
+
+class SubclassWithWrapperMethod extends Concurrent
+{
+    public function __construct(string $key)
+    {
+        parent::__construct(
+            key: $key,
+            default: fn () => new SubclassWithWrapperMethodData,
+            ttl: 60,
+        );
+    }
+
+    public function wrapperOnly(string $label): void
+    {
+        $this->label = $label;
     }
 }

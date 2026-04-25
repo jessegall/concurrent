@@ -338,14 +338,8 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     }
 
     /**
-     * Write a value to cache. Callables are resolved first:
-     *   - Zero-param non-static closure: $this is bound to the Concurrent
-     *     instance and the closure is invoked. If it returns null, mutations
-     *     are assumed to have gone through proxy methods (__set, __call,
-     *     etc.) which write on their own — no extra write happens here. If
-     *     it returns a non-null value, that value is stored (return-style).
-     *   - First param is by-reference: the value is mutated in place via that param.
-     *   - Otherwise: the callable's return value is stored.
+     * Resolve a callable value, then write to cache. Three callback styles:
+     * zero-param (binds $this via BoundProxy), by-reference, or return-style.
      *
      * @throws InvalidArgumentException If the validator rejects the value.
      */
@@ -353,14 +347,23 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     {
         if (is_callable($value) && !is_string($value)) {
             if ($this->shouldBindThis($value)) {
-                $bound = Closure::bind($value, $this, static::class);
+                $target = $this->get();
+                $proxy = new BoundProxy($target, $this);
+                $bound = Closure::bind($value, $proxy, null);
+
+                $snapshot = serialize($target);
                 $result = $bound();
 
-                if ($result === null) {
+                if ($result !== null) {
+                    $value = $result;
+                } elseif (serialize($target) !== $snapshot) {
+                    $value = $target;
+                } else {
+                    // Closure didn't mutate $target directly — any state changes
+                    // came from re-entrant writes via the wrapper, which already
+                    // wrote to cache. Skip the auto-write so we don't clobber them.
                     return;
                 }
-
-                $value = $result;
             } elseif ($this->acceptsByReference($value)) {
                 $current = $this->get();
                 $value($current);
@@ -378,12 +381,9 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     }
 
     /**
-     * Whether to bind $this (the Concurrent instance) to the callback before invoking.
-     *
-     * Triggered when:
-     *   - the callable is a Closure (only Closures can be rebound),
-     *   - the closure isn't static (static closures can't be rebound),
-     *   - the closure takes zero parameters (so it must be using $this, not an arg).
+     * Whether to bind $this to the callback before invoking. Triggered when
+     * the callable is a non-static Closure with zero parameters — there's no
+     * arg to receive the data, so the user is expected to use $this.
      */
     private function shouldBindThis(mixed $value): bool
     {
