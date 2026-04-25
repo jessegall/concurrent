@@ -169,6 +169,119 @@ class ThisBindingTest extends TestCase
         $this->assertSame(5, $concurrent());
     }
 
+    public function test_bound_closure_acquires_lock_only_once_for_multiple_mutations(): void
+    {
+        // Inside a bound zero-param closure, every $this->prop = X and
+        // $this->method() routes through __set/__call — each of which would
+        // try to acquire the lock. Concurrent's re-entrancy guard must
+        // suppress those nested acquisitions, leaving only the outer one
+        // from __invoke. Verify directly with a counting lock driver.
+        $lockLog = [];
+
+        $lock = new class ($lockLog) implements \JesseGall\Concurrent\Contracts\LockDriver {
+            /** @var array<int, string> */
+            private array $log;
+
+            public function __construct(array &$log)
+            {
+                $this->log = &$log;
+            }
+
+            public function acquire(string $key, int $ttl, int $timeout, callable $callback): mixed
+            {
+                $this->log[] = 'acquire';
+                $result = $callback();
+                $this->log[] = 'release';
+
+                return $result;
+            }
+        };
+
+        Concurrent::useCache(new \JesseGall\Concurrent\Testing\InMemoryCache);
+        Concurrent::useLock($lock);
+
+        $concurrent = new Concurrent(
+            key: 'test:this-binding:single-lock',
+            default: fn () => new ThisBindingDataWithMethods,
+            ttl: 60,
+        );
+
+        // Prime cache (this acquires + releases its own lock; clear log after).
+        $concurrent(function () {});
+        $lockLog = [];
+
+        $concurrent(function () {
+            /** @var ThisBindingDataWithMethods $this */
+            $this->count = 1;        // would normally acquire lock #2
+            $this->bump();           // would normally acquire lock #3
+            $this->setLabel('hi');   // would normally acquire lock #4
+            $this->label = 'final';  // would normally acquire lock #5
+        });
+
+        $this->assertSame(
+            ['acquire', 'release'],
+            $lockLog,
+            'Bound closure must acquire the lock exactly once, even with multiple inner mutations'
+        );
+
+        // Sanity: the mutations did happen.
+        $this->assertSame(2, $concurrent->count);     // 1 + bump()
+        $this->assertSame('final', $concurrent->label);
+    }
+
+    public function test_bound_closure_with_increment_acquires_lock_only_once(): void
+    {
+        // $this->count++ desugars to __get + __set, which would each try to
+        // touch the lock proxy. With the re-entrancy guard, multiple ++ ops
+        // inside one bound closure should still produce a single outer acquire.
+        $lockLog = [];
+
+        $lock = new class ($lockLog) implements \JesseGall\Concurrent\Contracts\LockDriver {
+            /** @var array<int, string> */
+            private array $log;
+
+            public function __construct(array &$log)
+            {
+                $this->log = &$log;
+            }
+
+            public function acquire(string $key, int $ttl, int $timeout, callable $callback): mixed
+            {
+                $this->log[] = 'acquire';
+                $result = $callback();
+                $this->log[] = 'release';
+
+                return $result;
+            }
+        };
+
+        Concurrent::useCache(new \JesseGall\Concurrent\Testing\InMemoryCache);
+        Concurrent::useLock($lock);
+
+        $concurrent = new Concurrent(
+            key: 'test:this-binding:increment-single-lock',
+            default: fn () => new ThisBindingDataWithMethods,
+            ttl: 60,
+        );
+
+        $concurrent(function () {});
+        $lockLog = [];
+
+        $concurrent(function () {
+            /** @var ThisBindingDataWithMethods $this */
+            $this->count++;
+            $this->count++;
+            $this->count++;
+        });
+
+        $this->assertSame(
+            ['acquire', 'release'],
+            $lockLog,
+            '++ inside bound closure must not acquire additional locks'
+        );
+        $this->assertSame(3, $concurrent->count);
+    }
+
     public function test_bound_closure_persists_across_calls(): void
     {
         $concurrent = new Concurrent(
