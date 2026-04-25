@@ -3,6 +3,7 @@
 namespace JesseGall\Concurrent;
 
 use ArrayAccess;
+use Closure;
 use InvalidArgumentException;
 use IteratorAggregate;
 use JesseGall\Concurrent\Attributes\ReadonlyMethod;
@@ -11,6 +12,7 @@ use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
 use JesseGall\Concurrent\Contracts\LockDriver;
 use JesseGall\Concurrent\Exceptions\ReadonlyViolationException;
 use ReflectionClass;
+use ReflectionFunction;
 use ReflectionMethod;
 use RuntimeException;
 use Traversable;
@@ -336,20 +338,28 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     }
 
     /**
-     * Write a value to cache. Callables are resolved first — if the first parameter
-     * is a reference, the value is modified in-place without needing a return.
+     * Write a value to cache. Callables are resolved first:
+     *   - Zero-param closure with an object target: $this is bound to the wrapped
+     *     value, the closure is called, and the (mutated) target is stored.
+     *   - First param is by-reference: the value is mutated in place via that param.
+     *   - Otherwise: the callable's return value is stored.
      *
      * @throws InvalidArgumentException If the validator rejects the value.
      */
     private function set(mixed $value = null): void
     {
         if (is_callable($value) && !is_string($value)) {
-            if ($this->acceptsByReference($value)) {
-                $current = $this->get();
+            $current = $this->get();
+
+            if ($this->shouldBindThis($value, $current)) {
+                $bound = Closure::bind($value, $current, $current::class);
+                $bound();
+                $value = $current;
+            } elseif ($this->acceptsByReference($value)) {
                 $value($current);
                 $value = $current;
             } else {
-                $value = $value($this->get());
+                $value = $value($current);
             }
         }
 
@@ -358,6 +368,31 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         }
 
         $this->cacheDriver->put($this->key, $value, $this->ttl);
+    }
+
+    /**
+     * Whether to bind $this to the wrapped value before invoking the callback.
+     *
+     * Triggered when:
+     *   - the callable is a Closure (only Closures can be rebound),
+     *   - the wrapped value is an object,
+     *   - the closure isn't static (static closures can't be rebound),
+     *   - the closure takes zero parameters (so it must be using $this, not an arg).
+     */
+    private function shouldBindThis(mixed $value, mixed $target): bool
+    {
+        if (! $value instanceof Closure) {
+            return false;
+        }
+
+        if (! is_object($target)) {
+            return false;
+        }
+
+        $reflection = new ReflectionFunction($value);
+
+        return ! $reflection->isStatic()
+            && $reflection->getNumberOfParameters() === 0;
     }
 
     /**
