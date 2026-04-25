@@ -339,8 +339,11 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
     /**
      * Write a value to cache. Callables are resolved first:
-     *   - Zero-param closure with an object target: $this is bound to the wrapped
-     *     value, the closure is called, and the (mutated) target is stored.
+     *   - Zero-param non-static closure: $this is bound to the Concurrent
+     *     instance and the closure is invoked. If it returns null, mutations
+     *     are assumed to have gone through proxy methods (__set, __call,
+     *     etc.) which write on their own — no extra write happens here. If
+     *     it returns a non-null value, that value is stored (return-style).
      *   - First param is by-reference: the value is mutated in place via that param.
      *   - Otherwise: the callable's return value is stored.
      *
@@ -349,17 +352,21 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     private function set(mixed $value = null): void
     {
         if (is_callable($value) && !is_string($value)) {
-            $current = $this->get();
+            if ($this->shouldBindThis($value)) {
+                $bound = Closure::bind($value, $this, static::class);
+                $result = $bound();
 
-            if ($this->shouldBindThis($value, $current)) {
-                $bound = Closure::bind($value, $current, $current::class);
-                $bound();
-                $value = $current;
+                if ($result === null) {
+                    return;
+                }
+
+                $value = $result;
             } elseif ($this->acceptsByReference($value)) {
+                $current = $this->get();
                 $value($current);
                 $value = $current;
             } else {
-                $value = $value($current);
+                $value = $value($this->get());
             }
         }
 
@@ -371,21 +378,16 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     }
 
     /**
-     * Whether to bind $this to the wrapped value before invoking the callback.
+     * Whether to bind $this (the Concurrent instance) to the callback before invoking.
      *
      * Triggered when:
      *   - the callable is a Closure (only Closures can be rebound),
-     *   - the wrapped value is an object,
      *   - the closure isn't static (static closures can't be rebound),
      *   - the closure takes zero parameters (so it must be using $this, not an arg).
      */
-    private function shouldBindThis(mixed $value, mixed $target): bool
+    private function shouldBindThis(mixed $value): bool
     {
         if (! $value instanceof Closure) {
-            return false;
-        }
-
-        if (! is_object($target)) {
             return false;
         }
 

@@ -6,16 +6,31 @@ use JesseGall\Concurrent\Concurrent;
 
 class ThisBindingTest extends TestCase
 {
-    public function test_zero_param_closure_binds_this_to_wrapped_object(): void
+    public function test_zero_param_closure_binds_this_to_concurrent_instance(): void
     {
         $concurrent = new Concurrent(
-            key: 'test:this-binding:basic',
+            key: 'test:this-binding:identity',
+            default: fn () => new ThisBindingData,
+            ttl: 60,
+        );
+
+        $captured = null;
+        $concurrent(function () use (&$captured) {
+            $captured = $this;
+        });
+
+        $this->assertSame($concurrent, $captured);
+    }
+
+    public function test_property_writes_via_this_route_through_proxy(): void
+    {
+        $concurrent = new Concurrent(
+            key: 'test:this-binding:property-write',
             default: fn () => new ThisBindingData,
             ttl: 60,
         );
 
         $concurrent(function () {
-            /** @var ThisBindingData $this */
             $this->count = 42;
             $this->status = 'ready';
         });
@@ -24,7 +39,26 @@ class ThisBindingTest extends TestCase
         $this->assertSame('ready', $concurrent->status);
     }
 
-    public function test_no_return_statement_is_not_required(): void
+    public function test_method_calls_via_this_route_through_proxy(): void
+    {
+        $concurrent = new Concurrent(
+            key: 'test:this-binding:method-call',
+            default: fn () => new ThisBindingDataWithMethods,
+            ttl: 60,
+        );
+
+        $concurrent(function () {
+            /** @var ThisBindingDataWithMethods $this */
+            $this->bump();
+            $this->bump();
+            $this->setLabel('hello');
+        });
+
+        $this->assertSame(2, $concurrent->count);
+        $this->assertSame('hello', $concurrent->label);
+    }
+
+    public function test_no_return_statement_required(): void
     {
         $concurrent = new Concurrent(
             key: 'test:this-binding:no-return',
@@ -42,21 +76,34 @@ class ThisBindingTest extends TestCase
         $this->assertSame(2, $concurrent->count);
     }
 
-    public function test_bound_closure_can_access_private_members(): void
+    public function test_subclass_methods_callable_via_this(): void
+    {
+        $session = new ThisBindingSubclass('test:this-binding:subclass');
+
+        $session(function () {
+            /** @var ThisBindingSubclass $this */
+            $this->bumpAndLabel('processing');
+        });
+
+        $this->assertSame(1, $session->count);
+        $this->assertSame('processing', $session->status);
+    }
+
+    public function test_array_target_supports_property_writes_via_proxy(): void
     {
         $concurrent = new Concurrent(
-            key: 'test:this-binding:private',
-            default: fn () => new ThisBindingDataWithPrivate,
+            key: 'test:this-binding:array',
+            default: fn () => [],
             ttl: 60,
         );
 
         $concurrent(function () {
-            /** @var ThisBindingDataWithPrivate $this */
-            $this->setSecret('opened');
+            $this->foo = 'bar';
+            $this->count = 7;
         });
 
-        $resolved = $concurrent();
-        $this->assertSame('opened', $resolved->reveal());
+        $this->assertSame('bar', $concurrent['foo']);
+        $this->assertSame(7, $concurrent['count']);
     }
 
     public function test_closure_with_param_still_uses_arg_style(): void
@@ -91,63 +138,35 @@ class ThisBindingTest extends TestCase
         $this->assertSame(99, $concurrent->count);
     }
 
+    public function test_zero_param_closure_returning_value_stores_it(): void
+    {
+        // Return-style is preserved for zero-param closures: if the closure
+        // returns a non-null value, that value is stored (this is the pattern
+        // ConcurrentList::clear() uses: $this(fn () => [])).
+        $concurrent = new Concurrent(
+            key: 'test:this-binding:return-style',
+            default: fn () => ['old'],
+            ttl: 60,
+        );
+
+        $concurrent(fn () => ['fresh']);
+
+        $this->assertSame(['fresh'], $concurrent());
+    }
+
     public function test_static_closure_falls_through_to_return_style(): void
     {
         $concurrent = new Concurrent(
             key: 'test:this-binding:static',
-            default: fn () => new ThisBindingData,
-            ttl: 60,
-        );
-
-        // A static closure cannot be rebound — it must fall through and behave
-        // like a plain return-style callback.
-        $concurrent(static fn () => (new ThisBindingData(count: 5)));
-
-        $this->assertSame(5, $concurrent->count);
-    }
-
-    public function test_zero_param_closure_with_array_target_falls_through(): void
-    {
-        $concurrent = new Concurrent(
-            key: 'test:this-binding:array',
-            default: fn () => [],
-            ttl: 60,
-        );
-
-        // No object to bind to — the closure's return value is stored.
-        $concurrent(fn () => ['a', 'b', 'c']);
-
-        $this->assertSame(['a', 'b', 'c'], $concurrent());
-    }
-
-    public function test_zero_param_closure_with_scalar_target_falls_through(): void
-    {
-        $concurrent = new Concurrent(
-            key: 'test:this-binding:scalar',
             default: 0,
             ttl: 60,
         );
 
-        $concurrent(fn () => 42);
+        // Static closures cannot be rebound — they fall through and behave as
+        // a plain return-style callback.
+        $concurrent(static fn () => 5);
 
-        $this->assertSame(42, $concurrent());
-    }
-
-    public function test_anonymous_class_target_supports_binding(): void
-    {
-        $concurrent = new Concurrent(
-            key: 'test:this-binding:anon',
-            default: fn () => new class {
-                public int $x = 0;
-            },
-            ttl: 60,
-        );
-
-        $concurrent(function () {
-            $this->x = 11;
-        });
-
-        $this->assertSame(11, $concurrent->x);
+        $this->assertSame(5, $concurrent());
     }
 
     public function test_bound_closure_persists_across_calls(): void
@@ -176,17 +195,45 @@ class ThisBindingData
     ) {}
 }
 
-class ThisBindingDataWithPrivate
+class ThisBindingDataWithMethods
 {
-    private string $secret = 'closed';
+    public int $count = 0;
+    public string $label = '';
 
-    public function setSecret(string $value): void
+    public function bump(): void
     {
-        $this->secret = $value;
+        $this->count++;
     }
 
-    public function reveal(): string
+    public function setLabel(string $label): void
     {
-        return $this->secret;
+        $this->label = $label;
+    }
+}
+
+class ThisBindingSubclassData
+{
+    public int $count = 0;
+    public string $status = 'idle';
+}
+
+class ThisBindingSubclass extends Concurrent
+{
+    public function __construct(string $key)
+    {
+        parent::__construct(
+            key: $key,
+            default: fn () => new ThisBindingSubclassData,
+            ttl: 60,
+        );
+    }
+
+    public function bumpAndLabel(string $status): void
+    {
+        $this(function () use ($status) {
+            /** @var ThisBindingSubclass $this */
+            $this->count++;
+            $this->status = $status;
+        });
     }
 }
