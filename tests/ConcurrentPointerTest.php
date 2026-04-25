@@ -134,10 +134,10 @@ class ConcurrentPointerTest extends TestCase
 
         $this->assertInstanceOf(ConcurrentPointer::class, $pointer);
 
-        $instance = TraitTarget::start('via-trait');
+        $instance = TraitTarget::start();
 
         $this->assertInstanceOf(TraitTarget::class, $instance);
-        $this->assertSame('via-trait', $instance->id);
+        $this->assertNotEmpty($instance->id);
 
         // Pointer key is derived from the class — different traited class must not collide.
         $this->assertNull(OtherTraitTarget::current());
@@ -150,7 +150,7 @@ class ConcurrentPointerTest extends TestCase
 
     public function test_trait_current_resolves_after_start(): void
     {
-        $started = TraitTarget::start('xyz');
+        $started = TraitTarget::start();
         $resolved = TraitTarget::current();
 
         $this->assertNotNull($resolved);
@@ -159,7 +159,7 @@ class ConcurrentPointerTest extends TestCase
 
     public function test_trait_release_clears_pointer(): void
     {
-        TraitTarget::start('temp');
+        TraitTarget::start();
         $this->assertNotNull(TraitTarget::current());
 
         TraitTarget::release();
@@ -167,28 +167,36 @@ class ConcurrentPointerTest extends TestCase
         $this->assertNull(TraitTarget::current());
     }
 
-    public function test_trait_start_with_no_id_auto_generates(): void
+    public function test_trait_start_auto_generates_unique_ids(): void
     {
-        $instance = TraitTarget::start();
+        $a = TraitTarget::start();
+        $b = TraitTarget::start();
 
-        $this->assertNotEmpty($instance->id);
-        $this->assertSame($instance->id, TraitTarget::current()->id);
+        $this->assertNotEmpty($a->id);
+        $this->assertNotEmpty($b->id);
+        $this->assertNotSame($a->id, $b->id);
     }
 
     public function test_trait_pointer_key_can_be_overridden(): void
     {
-        // CustomKeyTarget overrides pointerKey(); make sure it's used.
         $expectedKey = 'custom:stable-pointer';
-        $instance = CustomKeyTarget::start('key-test');
+        $instance = CustomKeyTarget::start();
 
         // Read directly from cache to verify the override took effect.
         $stored = cache()->get($expectedKey);
         $this->assertSame($instance->id, $stored);
     }
 
+    public function test_trait_generate_id_can_be_overridden(): void
+    {
+        $instance = FixedIdTarget::start();
+
+        $this->assertSame('fixed-id-from-override', $instance->id);
+    }
+
     public function test_trait_spreads_extra_args_to_constructor(): void
     {
-        $started = MultiArgTarget::start(null, 'tenant-A', 7);
+        $started = MultiArgTarget::start('tenant-A', 7);
 
         $this->assertSame('tenant-A', $started->tenant);
         $this->assertSame(7, $started->shard);
@@ -206,16 +214,16 @@ class ConcurrentPointerTest extends TestCase
 
     public function test_trait_supports_constructor_where_id_is_not_first_arg(): void
     {
-        $started = ReorderedArgsTarget::start('run-42', 'tenant-A');
+        $started = ReorderedArgsTarget::start('tenant-A');
 
         $this->assertSame('tenant-A', $started->tenant);
-        $this->assertSame('run-42', $started->runId);
+        $this->assertNotEmpty($started->runId);
 
         $resolved = ReorderedArgsTarget::current('tenant-A');
 
         $this->assertNotNull($resolved);
         $this->assertSame('tenant-A', $resolved->tenant);
-        $this->assertSame('run-42', $resolved->runId);
+        $this->assertSame($started->runId, $resolved->runId);
     }
 
     public function test_pointer_spreads_extra_args(): void
@@ -329,6 +337,29 @@ class CustomKeyTarget extends Concurrent
     protected static function fromPointerId(string $id, mixed ...$args): static
     {
         return new static($id);
+    }
+}
+
+class FixedIdTarget extends Concurrent
+{
+    use WithPointer;
+
+    public function __construct(public readonly string $id)
+    {
+        parent::__construct(
+            key: "fixed-id-target:{$id}",
+            default: fn () => new \stdClass,
+        );
+    }
+
+    protected static function fromPointerId(string $id, mixed ...$args): static
+    {
+        return new static($id);
+    }
+
+    protected static function generateId(): string
+    {
+        return 'fixed-id-from-override';
     }
 }
 
