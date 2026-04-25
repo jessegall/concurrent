@@ -62,7 +62,7 @@ $cart(fn (Cart &$data) => $data->items[] = $newItem); // by-reference param
 $counter(fn ($n) => $n + 1);                          // return-style
 ```
 
-`$concurrent->count++` *outside* a callback is **not** atomic — it's a read followed by a write, and another process can interleave. Always wrap multi-step or read-modify-write operations in a callback.
+`$concurrent->count++` *outside* a callback is **not** atomic — it's a read followed by a write, and another process can interleave. And `$concurrent->items[] = $x` outside a callback **silently does nothing** (PHP can't write through a by-value `__get`). Always wrap multi-step or array-element writes in a callback.
 
 ## Subclassing
 
