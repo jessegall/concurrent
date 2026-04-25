@@ -194,6 +194,63 @@ class ConcurrentTest extends TestCase
         $this->assertSame(3, $concurrent->getCount());
     }
 
+    public function test_wrapped_class_methods_can_mutate_arrays_internally(): void
+    {
+        // Inside a wrapped class method, $this is the real instance — not the
+        // Concurrent wrapper — so plain PHP semantics apply: array appends,
+        // nested writes, anything goes. This is the same pattern that
+        // silently fails when attempted from OUTSIDE via $concurrent->prop[]=X.
+        $cart = new class {
+            /** @var list<string> */
+            public array $items = [];
+
+            /** @var array<string, int> */
+            public array $totals = ['count' => 0, 'subtotal' => 0];
+
+            public string $lastSku = '';
+
+            public function addItem(string $sku, int $price): void
+            {
+                $this->items[] = $sku;          // array append on a property
+                $this->totals['count']++;        // nested array element increment
+                $this->totals['subtotal'] += $price;
+                $this->lastSku = $sku;
+            }
+        };
+
+        $concurrent = new Concurrent('test:wrapped-internal-mutate', default: fn () => clone $cart, ttl: 60);
+
+        $concurrent->addItem('shirt', 20);
+        $concurrent->addItem('jeans', 50);
+        $concurrent->addItem('hat', 15);
+
+        $this->assertSame(['shirt', 'jeans', 'hat'], $concurrent->items);
+        $this->assertSame(3, $concurrent->totals['count']);
+        $this->assertSame(85, $concurrent->totals['subtotal']);
+        $this->assertSame('hat', $concurrent->lastSku);
+    }
+
+    public function test_wrapped_class_method_persists_mutation_across_instances(): void
+    {
+        // Same wrapped-class-internal mutation, but verify it's actually
+        // written to cache (a fresh Concurrent on the same key sees it).
+        $obj = new class {
+            public array $events = [];
+
+            public function record(string $event): void
+            {
+                $this->events[] = $event;
+            }
+        };
+
+        $first = new Concurrent('test:wrapped-persist', default: fn () => clone $obj, ttl: 60);
+        $first->record('boot');
+        $first->record('connect');
+
+        $second = new Concurrent('test:wrapped-persist', default: fn () => clone $obj, ttl: 60);
+        $this->assertSame(['boot', 'connect'], $second->events);
+    }
+
     public function test_proxies_property_access_to_wrapped_object(): void
     {
         $obj = new class {

@@ -35,34 +35,63 @@ $cart(null);                   // forget
 
 ## Atomic Updates
 
-Pass a zero-param closure to `$concurrent(...)`. `$this` is bound to the wrapped value: read properties, write properties, append to arrays, call methods — all under one lock, all atomic. **This is the recommended style.**
+Three ways to mutate state atomically — pick whichever fits.
+
+### 1. Methods on the wrapped class — best when you own the source
+
+The cleanest option: just put the mutation logic in a method on the wrapped class itself.
+
+```php
+class Cart {
+    public array $items = [];
+
+    public function addItem(string $sku): void {
+        $this->items[] = $sku;     // ✓ plain PHP, $this is the real Cart
+        $this->lastSku = $sku;     // no proxy, no magic, full semantics
+    }
+}
+
+$cart = new Concurrent(key: 'cart', default: fn () => new Cart);
+$cart->addItem('shirt');           // atomic — Concurrent locks, runs the method, writes back
+```
+
+Inside the method body, `$this` is the actual `Cart` instance — Concurrent isn't in the picture, so PHP rules apply normally (array appends, nested writes, anything works). This is the recommended approach when you control the wrapped class.
+
+### 2. Bound `$this` callbacks — when you can't (or don't want to) modify the wrapped class
+
+For ad-hoc updates — or when the wrapped class is third-party / `\stdClass` / whatever — pass a zero-param closure to `$concurrent(...)`. `$this` is bound to the wrapped value (via a proxy that routes property/method access correctly):
 
 ```php
 $cart(function () {
-    $this->items[] = $newItem;        // array append — works
-    $this->totals['subtotal'] = 100;  // nested array write — works
+    $this->items[] = $newItem;       // array append — works
+    $this->totals['subtotal'] = 100; // nested write — works
     $this->status = 'pending';
-    $this->recalculate();             // method on wrapped value
 });
 ```
 
 `$this` falls through to the Concurrent subclass for missing methods, so domain methods on your `extends Concurrent` class are reachable too. `self::`, `parent::`, and `static::` resolve to the lexical scope where the closure was defined.
 
-Arrow functions work too — terse one-liners with bound `$this`:
+Arrow functions work too — terse one-liners:
 
 ```php
 $counter(fn () => $this->count++);
 $cart(fn () => $this->items[] = $newItem);
 ```
 
-Two alternative styles, both atomic:
+Other supported callback shapes:
 
 ```php
 $cart(fn (Cart &$data) => $data->items[] = $newItem); // by-reference param
 $counter(fn ($n) => $n + 1);                          // return-style
 ```
 
-`$concurrent->count++` *outside* a callback is **not** atomic — it's a read followed by a write, and another process can interleave. And `$concurrent->items[] = $x` outside a callback **silently does nothing** (PHP can't write through a by-value `__get`). Always wrap multi-step or array-element writes in a callback.
+### 3. A wrapper subclass that owns the domain API — when you control neither
+
+If the wrapped class is sealed (third-party, generated, etc.) and you still want a clean API, define your own `Concurrent` subclass with domain methods that internally use callbacks. See [Subclassing](#subclassing).
+
+### Outside a callback
+
+`$concurrent->count++` *outside* any callback or method is **not** atomic — it's a read followed by a write, and another process can interleave. And `$concurrent->items[] = $x` outside a callback **silently does nothing** (PHP can't write through a by-value `__get`). Always go through one of the three patterns above.
 
 ## Subclassing
 
