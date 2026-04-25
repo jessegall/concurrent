@@ -5,10 +5,13 @@ namespace JesseGall\Concurrent;
 use ArrayAccess;
 use InvalidArgumentException;
 use IteratorAggregate;
+use JesseGall\Concurrent\Attributes\ReadonlyMethod;
 use JesseGall\Concurrent\Contracts\CacheDriver;
 use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
 use JesseGall\Concurrent\Contracts\LockDriver;
+use JesseGall\Concurrent\Exceptions\ReadonlyViolationException;
 use ReflectionClass;
+use ReflectionMethod;
 use RuntimeException;
 use Traversable;
 
@@ -218,13 +221,15 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
     /**
      * Proxy method calls to the wrapped value.
-     * Read-only methods (via DeclaresReadOnlyMethods) skip locking.
+     * Read-only methods (via DeclaresReadOnlyMethods or #[ReadonlyMethod]) skip locking.
      * All other methods acquire a lock, call the method, and write back.
      */
     public function __call(string $name, array $arguments)
     {
-        if ($this->isReadOnlyMethod($name)) {
-            return $this->forwardDecoratedCallTo($this->get(), $name, $arguments);
+        $target = $this->get();
+
+        if ($this->isReadOnlyMethod($name, $target)) {
+            return $this->callReadOnly($target, $name, $arguments);
         }
 
         return $this->lock()->call($name, $arguments);
@@ -473,12 +478,56 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     }
 
     /**
-     * Check if the method is declared as read-only on this Concurrent subclass.
+     * Check if the method is declared as read-only — either listed via the
+     * DeclaresReadOnlyMethods interface on this Concurrent subclass, or
+     * marked with #[ReadonlyMethod] on the wrapped value's class.
      */
-    private function isReadOnlyMethod(string $name): bool
+    private function isReadOnlyMethod(string $name, mixed $target): bool
     {
-        return $this instanceof DeclaresReadOnlyMethods
-            && in_array($name, static::readOnlyMethods(), true);
+        if ($this instanceof DeclaresReadOnlyMethods
+            && in_array($name, static::readOnlyMethods(), true)) {
+            return true;
+        }
+
+        return $this->hasReadonlyAttribute($name, $target);
+    }
+
+    /**
+     * Check whether the target's method carries the #[ReadonlyMethod] attribute.
+     */
+    private function hasReadonlyAttribute(string $name, mixed $target): bool
+    {
+        if (! is_object($target) || ! method_exists($target, $name)) {
+            return false;
+        }
+
+        $method = new ReflectionMethod($target, $name);
+
+        return $method->getAttributes(ReadonlyMethod::class) !== [];
+    }
+
+    /**
+     * Forward a read-only method call without acquiring a lock or writing back.
+     *
+     * Snapshots the target before the call and compares after; if the method
+     * mutated the wrapped value, throws a ReadonlyViolationException so the
+     * silently-discarded write is surfaced rather than tolerated.
+     */
+    private function callReadOnly(mixed $target, string $name, array $arguments): mixed
+    {
+        $before = serialize($target);
+
+        $result = $this->forwardDecoratedCallTo($target, $name, $arguments);
+
+        if (serialize($target) !== $before) {
+            $class = is_object($target) ? $target::class : gettype($target);
+
+            throw new ReadonlyViolationException(
+                "Method {$class}::{$name}() is declared read-only but mutated the wrapped value."
+            );
+        }
+
+        return $result;
     }
 
     /**
