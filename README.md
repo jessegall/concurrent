@@ -49,9 +49,10 @@ $cart->discount = 10;
 $cart->total = $cart->subtotal - 10;
 
 // One atomic update. The lock is held across both lines.
-$cart(function () {
-    $this->discount = 10;
-    $this->total = $this->subtotal - 10;
+$cart(function (Cart $data) {
+    $data->discount = 10;
+    $data->total = $data->subtotal - 10;
+    return $data;
 });
 ```
 
