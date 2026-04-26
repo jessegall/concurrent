@@ -3,6 +3,7 @@
 namespace JesseGall\Concurrent\Tests;
 
 use JesseGall\Concurrent\AutoKeyResolver;
+use JesseGall\Concurrent\Concurrent;
 use RuntimeException;
 use stdClass;
 
@@ -49,6 +50,25 @@ class AutoKeyResolverTest extends TestCase
 
         $this->assertSame($first, $second);
     }
+
+    public function test_resolves_through_promoted_property_default(): void
+    {
+        $first = new PromotedAttemptsHost;
+        ($first->attempts)(['192.168.1.1' => 3]);
+
+        // Second instance: same auto-key, same cached state.
+        $second = new PromotedAttemptsHost;
+
+        $this->assertSame(['192.168.1.1' => 3], ($second->attempts)());
+    }
+}
+
+final class PromotedAttemptsHost
+{
+    public function __construct(
+        // Default must be a constant expression, so no closure factory here.
+        public readonly Concurrent $attempts = new Concurrent(default: []),
+    ) {}
 }
 
 final class AutoKeyResolverHost
