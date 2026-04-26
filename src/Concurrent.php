@@ -3,17 +3,12 @@
 namespace JesseGall\Concurrent;
 
 use ArrayAccess;
-use Closure;
 use InvalidArgumentException;
 use IteratorAggregate;
-use JesseGall\Concurrent\Attributes\ReadonlyMethod;
 use JesseGall\Concurrent\Contracts\CacheDriver;
 use JesseGall\Concurrent\Contracts\DeclaresReadOnlyMethods;
+use JesseGall\Concurrent\Contracts\KeyResolver;
 use JesseGall\Concurrent\Contracts\LockDriver;
-use JesseGall\Concurrent\Exceptions\ReadonlyViolationException;
-use ReflectionClass;
-use ReflectionFunction;
-use ReflectionMethod;
 use RuntimeException;
 use Traversable;
 
@@ -30,37 +25,27 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 {
     use ForwardsCallsToTarget;
 
-    private const int MAX_BACKTRACE_DEPTH = 10;
-
     private static CacheDriver|null $defaultCache = null;
     private static LockDriver|null $defaultLock = null;
+
+    private readonly KeyResolver $keyResolver;
+    private readonly CallableResolver $callableResolver;
+    private readonly ReadonlyMethodInvoker $readonlyInvoker;
+    private readonly ConcurrentValueValidator $validator;
 
     /** @var TValue|callable(): TValue */
     private readonly mixed $default;
     private readonly int|null $ttl;
     private readonly int $lockDuration;
     private readonly bool $readLock;
-    private readonly ConcurrentValueValidator $validator;
     private readonly CacheDriver $cacheDriver;
     private readonly LockDriver $lockDriver;
 
     /** Re-entrancy guard so nested writes share the outer lock. */
     private bool $isLocked = false;
 
-    private mixed $source = null;
-    private bool $keyResolved = false;
-
     private string $key {
-        get {
-            if ($this->keyResolved) {
-                return $this->key;
-            }
-
-            $key = $this->resolveKeyFromSourceProperty();
-            $this->keyResolved = true;
-
-            return $this->key = $key;
-        }
+        get => $this->keyResolver->resolve();
     }
 
     /**
@@ -89,13 +74,13 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         $this->validator = new ConcurrentValueValidator($validator);
         $this->cacheDriver = $cache ?? $this->resolveDefaultCache();
         $this->lockDriver = $lock ?? $this->resolveDefaultLock();
-
-        if ($key !== null) {
-            $this->key = $key;
-            $this->keyResolved = true;
-        } else {
-            $this->source = $this->resolveSource();
-        }
+        $this->callableResolver = new CallableResolver($this);
+        $this->keyResolver = $key !== null ? new StaticKeyResolver($key) : new AutoKeyResolver($this);
+        $this->readonlyInvoker = new ReadonlyMethodInvoker(
+            static::class,
+            $this instanceof DeclaresReadOnlyMethods ? static::readOnlyMethods() : [],
+            $this->forwardDecoratedCallTo(...),
+        );
     }
 
     // ----------[ Global Driver Configuration ]----------
@@ -121,18 +106,16 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     /**
      * No args: get. Null: forget. Callable: atomic update. Other: store.
      *
-     * @param  TValue|callable(TValue): TValue|null  $value
+     * @param TValue|callable(TValue): TValue|null $value
      * @return TValue|void
      */
     public function __invoke(mixed $value = null)
     {
-        if (func_num_args() === 0)
-        {
+        if (func_num_args() === 0) {
             return $this->get();
         }
 
-        if (is_null($value))
-        {
+        if (is_null($value)) {
             $this->lock()->forget();
 
             return;
@@ -147,8 +130,8 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     {
         $target = $this->get();
 
-        if ($this->isReadOnlyMethod($name, $target)) {
-            return $this->callReadOnly($target, $name, $arguments);
+        if ($this->readonlyInvoker->isReadOnly($target, $name)) {
+            return $this->readonlyInvoker->invoke($target, $name, $arguments);
         }
 
         return $this->lock()->call($name, $arguments);
@@ -240,36 +223,19 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     }
 
     /**
-     * Resolve a callable value (zero-param binds $this via BoundProxy;
-     * by-ref param mutates in place; otherwise return-style), then write.
+     * Run any callable against the wrapped value, then write the result.
+     * Skips the write if the callable was a bound-$this closure that
+     * touched nothing and returned null.
      *
      * @throws InvalidArgumentException If the validator rejects the value.
      */
     private function set(mixed $value = null): void
     {
         if (is_callable($value) && !is_string($value)) {
-            if ($this->shouldBindThis($value)) {
-                $target = $this->get();
-                $proxy = new BoundProxy($target, $this);
+            [$value, $shouldWrite] = $this->callableResolver->resolve($value, $this->get());
 
-                $scope = new ReflectionFunction($value)->getClosureScopeClass()?->getName();
-                $bound = Closure::bind($value, $proxy, $scope);
-
-                $result = $bound();
-
-                if ($proxy->touchedData) {
-                    $value = $target;
-                } elseif ($result !== null) {
-                    $value = $result;
-                } else {
-                    return;
-                }
-            } elseif ($this->acceptsByReference($value)) {
-                $current = $this->get();
-                $value($current);
-                $value = $current;
-            } else {
-                $value = $value($this->get());
+            if (!$shouldWrite) {
+                return;
             }
         }
 
@@ -278,18 +244,6 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         }
 
         $this->cacheDriver->put($this->key, $value, $this->ttl);
-    }
-
-    private function shouldBindThis(mixed $value): bool
-    {
-        if (! $value instanceof Closure) {
-            return false;
-        }
-
-        $reflection = new ReflectionFunction($value);
-
-        return ! $reflection->isStatic()
-            && $reflection->getNumberOfParameters() === 0;
     }
 
     private function setProperty(string|null $key, mixed $value): void
@@ -385,53 +339,6 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         };
     }
 
-    private function isReadOnlyMethod(string $name, mixed $target): bool
-    {
-        if ($this instanceof DeclaresReadOnlyMethods
-            && in_array($name, static::readOnlyMethods(), true)) {
-            return true;
-        }
-
-        return $this->hasReadonlyAttribute($name, $target);
-    }
-
-    private function hasReadonlyAttribute(string $name, mixed $target): bool
-    {
-        if (! is_object($target) || ! method_exists($target, $name)) {
-            return false;
-        }
-
-        $method = new ReflectionMethod($target, $name);
-
-        return $method->getAttributes(ReadonlyMethod::class) !== [];
-    }
-
-    /**
-     * Run a read-only method without locking. Throws if the method actually
-     * mutates the wrapped value.
-     */
-    private function callReadOnly(mixed $target, string $name, array $arguments): mixed
-    {
-        $before = serialize($target);
-
-        $result = $this->forwardDecoratedCallTo($target, $name, $arguments);
-
-        if (serialize($target) !== $before) {
-            $class = is_object($target) ? $target::class : gettype($target);
-
-            throw new ReadonlyViolationException(
-                "Method {$class}::{$name}() is declared read-only but mutated the wrapped value."
-            );
-        }
-
-        return $result;
-    }
-
-    private function acceptsByReference(callable $callable): bool
-    {
-        return CallableInspector::acceptsByReference($callable);
-    }
-
     // ----------[ Default Resolution ]----------
 
     private function resolveDefaultCache(): CacheDriver
@@ -469,56 +376,4 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         return class_exists(\Illuminate\Foundation\Application::class) && function_exists('app');
     }
 
-    // ----------[ Auto-Key Resolution ]----------
-
-    /**
-     * Walk the call stack to find the constructor that created this instance.
-     *
-     * @throws RuntimeException If no owning constructor is found.
-     */
-    private function resolveSource(): mixed
-    {
-        $source = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT, self::MAX_BACKTRACE_DEPTH);
-
-        foreach ($source as $item) {
-            $object = $item['object'] ?? null;
-            $function = $item['function'] ?? null;
-
-            if ($object && $object !== $this && $function === '__construct') {
-                return $object;
-            }
-        }
-
-        throw new RuntimeException(
-            'No key provided. Pass a key: new ' . static::class . '(key: "my-key"). '
-            . 'A key can only be omitted when created inside a class constructor as a property.'
-        );
-    }
-
-    /** @throws RuntimeException If no matching property is found. */
-    private function resolveKeyFromSourceProperty(): string
-    {
-        $reflector = new ReflectionClass($this->source);
-
-        foreach ($reflector->getProperties() as $property) {
-            if ($property->isStatic()) {
-                continue;
-            }
-
-            if (!$property->isInitialized($this->source)) {
-                continue;
-            }
-
-            $value = $property->getValue($this->source);
-
-            if ($value === $this) {
-                return "{$reflector->getName()}:{$property->getName()}";
-            }
-        }
-
-        throw new RuntimeException(
-            'Unable to auto-resolve cache key. Pass a key: new ' . static::class . '(key: "my-key"). '
-            . 'A key can only be omitted when created inside a class constructor as a property.'
-        );
-    }
 }

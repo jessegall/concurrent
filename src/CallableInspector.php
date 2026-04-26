@@ -2,6 +2,7 @@
 
 namespace JesseGall\Concurrent;
 
+use Closure;
 use ReflectionFunction;
 use ReflectionNamedType;
 
@@ -16,6 +17,21 @@ class CallableInspector
 
         return $ref->getNumberOfParameters() > 0
             && $ref->getParameters()[0]->isPassedByReference();
+    }
+
+    /**
+     * Check if the callable is a non-static, zero-parameter closure that
+     * should be invoked with $this rebound to the wrapped value.
+     */
+    public static function shouldBindThis(mixed $callable): bool
+    {
+        if (! $callable instanceof Closure) {
+            return false;
+        }
+
+        $ref = new ReflectionFunction($callable);
+
+        return ! $ref->isStatic() && $ref->getNumberOfParameters() === 0;
     }
 
     /**

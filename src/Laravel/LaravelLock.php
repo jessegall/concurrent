@@ -11,14 +11,9 @@ class LaravelLock implements LockDriver
     {
         $lock = Cache::lock($key, $ttl);
 
-        try
-        {
-            $lock->block($timeout);
-
-            return $callback();
-        }
-        finally
-        {
+        try {
+            return $lock->block($timeout, $callback);
+        } finally {
             $lock->release();
         }
     }

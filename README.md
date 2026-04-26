@@ -188,13 +188,30 @@ class ProcessingSession extends Concurrent
 }
 ```
 
-## Helper Traits
+## Auto-generated Keys
 
-Concurrent's public surface is deliberately small. Every method on `Concurrent` is one that can't appear on the wrapped value or a subclass, so wrapping a raw value or extending `Concurrent` with your own domain methods doesn't collide with the proxy's API.
+When a `Concurrent` is constructed inside another class's `__construct` and stored on a property of that class, you can omit `key:`. The wrapper figures out the key on first use by reflecting on the owning class and finding the property it's assigned to. The result is `{FullyQualifiedClassName}:{propertyName}`.
+
+```php
+class RateLimiter
+{
+    /** @var Concurrent<array> */
+    private Concurrent $attempts; // <-- Will receive auto-generated key "App\RateLimiter:attempts"
+
+    public function __construct()
+    {
+        $this->attempts = new Concurrent(default: fn () => []);
+    }
+}
+```
+
+Two `RateLimiter` instances share the same auto-key, so they see the same cached state. 
 
 ### WithAccessors
 
-Opt-in helpers (`get`, `set`, `has`, `update`, `clear`) for subclasses that want them. Kept off the base class so they don't shadow methods on whatever you wrap.
+Concurrent's public surface is deliberately small. Every method on `Concurrent` is one that can't appear on the wrapped value or a subclass, so wrapping a raw value or extending `Concurrent` with your own domain methods doesn't collide with the proxy's API.
+
+`WithAccessors` is opt-in for that reason: it adds helpers (`get`, `set`, `has`, `update`, `clear`) on subclasses that want them, without baking them into the base class where they'd shadow methods on whatever you wrap.
 
 ```php
 /** @extends Concurrent<ActivityData> */
