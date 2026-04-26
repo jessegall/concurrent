@@ -34,7 +34,7 @@ class ConcurrentList extends Concurrent
     /** Removes by index and re-indexes the list. */
     public function remove(int $index): HigherOrderConcurrentChainProxy
     {
-        return (new HigherOrderConcurrentChainProxy($this))->queue(
+        return new HigherOrderConcurrentChainProxy($this)->queue(
             function () use ($index) {
                 $this(function (array &$list) use ($index) {
                     array_splice($list, $index, 1);
@@ -66,7 +66,7 @@ class ConcurrentList extends Concurrent
      */
     public function each(callable $callback): HigherOrderConcurrentChainProxy
     {
-        return (new HigherOrderConcurrentChainProxy($this))->queue(
+        return new HigherOrderConcurrentChainProxy($this)->queue(
             function () use ($callback) {
                 $this(function (array &$list) use ($callback) {
                     foreach ($list as $index => $value)
@@ -89,7 +89,7 @@ class ConcurrentList extends Concurrent
      */
     public function map(callable $callback): HigherOrderConcurrentChainProxy
     {
-        return (new HigherOrderConcurrentChainProxy($this))->queue(
+        return new HigherOrderConcurrentChainProxy($this)->queue(
             function () use ($callback) {
                 $byReference = CallableInspector::acceptsByReference($callback);
 
@@ -117,14 +117,14 @@ class ConcurrentList extends Concurrent
      */
     public function filter(callable $callback): HigherOrderConcurrentChainProxy
     {
-        return (new HigherOrderConcurrentChainProxy($this))->queue(
+        return new HigherOrderConcurrentChainProxy($this)->queue(
             fn () => $this(fn (array $list) => array_values(array_filter($list, $callback, ARRAY_FILTER_USE_BOTH))),
         );
     }
 
     public function clear(): HigherOrderConcurrentChainProxy
     {
-        return (new HigherOrderConcurrentChainProxy($this))->queue(
+        return new HigherOrderConcurrentChainProxy($this)->queue(
             fn () => $this(fn () => []),
         );
     }

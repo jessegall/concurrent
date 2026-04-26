@@ -36,9 +36,26 @@ $cart();                       // get the value
 $cart(null);                   // forget
 ```
 
-## Atomic Updates
+Every write persists to the cache automatically. No `save()` or `flush()` step. Each write is atomic on its own.
 
-Three ways to mutate state atomically. Pick whichever fits.
+## Grouping Writes Into One Atomic Update
+
+Use a callback when you need several writes (or a read-then-write) to land as one atomic step, so nothing else can interleave.
+
+```php
+// Two separate atomic writes. Another worker can read or write
+// between them and see a half-updated cart.
+$cart->discount = 10;
+$cart->total = $cart->subtotal - 10;
+
+// One atomic update. The lock is held across both lines.
+$cart(function () {
+    $this->discount = 10;
+    $this->total = $this->subtotal - 10;
+});
+```
+
+Three ways to express the grouped update. Pick whichever fits.
 
 ### 1. Methods on the wrapped class
 
@@ -59,21 +76,21 @@ $cart = new Concurrent(key: 'cart', default: fn () => new Cart);
 $cart->addItem('shirt');           // atomic: Concurrent locks, runs the method, writes back
 ```
 
-Inside the method body, `$this` is the actual `Cart` instance. Concurrent isn't in the picture, so PHP rules apply normally (array appends, nested writes, all of it).
+### 2. Callbacks
 
-### 2. Bound `$this` callbacks
+#### Bound Callback
 
-For ad-hoc updates, or when the wrapped class is third-party, `\stdClass`, etc., pass a zero-param closure to `$concurrent(...)`. `$this` is bound to the wrapped value via a proxy that routes property and method access correctly:
+Pass a zero-param closure to `$concurrent(...)`:
 
 ```php
 $cart(function () {
-    $this->items[] = $newItem;       // array append
-    $this->totals['subtotal'] = 100; // nested write
+    $this->items[] = $newItem;
+    $this->totals['subtotal'] = 100;
     $this->status = 'pending';
 });
 ```
 
-`$this` falls through to the Concurrent subclass for missing methods, so domain methods on your `extends Concurrent` class are reachable too. `self::`, `parent::`, and `static::` resolve to the lexical scope where the closure was defined.
+Inside the callback, `$this` behaves like the Concurrent wrapper merged with the wrapped value: the wrapped value's properties and methods take precedence, anything missing falls through to the wrapper. `self::`, `parent::`, and `static::` still resolve to the wrapper class, so constants and static methods on it work as you'd expect.
 
 Arrow functions work too:
 
@@ -82,7 +99,23 @@ $counter(fn () => $this->count++);
 $cart(fn () => $this->items[] = $newItem);
 ```
 
-#### By-reference parameter
+#### Transform Callback
+
+Receive the value, return the new one. Best for replacing the whole value, especially scalars:
+
+```php
+// Arrow functions return the expression's value implicitly.
+$counter(fn (int $n) => $n + 1);
+$concurrent(fn (array $value) => [...$value, 'new entry']);
+
+// Non-arrow functions need an explicit return.
+$cart(function (Cart $data) {
+    $data->discount = 10;
+    return $data;
+});
+```
+
+#### By-reference Callback
 
 Take the wrapped value as a `&`-marked parameter and mutate it directly. Concurrent sees the mutated value and writes it back; no return needed.
 
@@ -95,21 +128,13 @@ $cart(function (Cart &$data) {
 });
 ```
 
-When this is the right pick:
+Use a By-reference Callback when:
 
-- The wrapped value is itself an array. Bound `$this` can't do `$this[] = X` (the proxy doesn't implement `ArrayAccess`); `&$data[] = X` works straight off the parameter.
-- You want explicit PHPStan/Psalm support. A typed `Cart &$data` parameter is recognized by static analyzers; bound `$this` resolves to `BoundProxy` instead. (Generic `@extends Concurrent<Cart>` / `@var Concurrent<Cart>` annotations already cover IDE autocomplete on bound `$this`.)
+- **The wrapped value is an array.** `$this[]` doesn't work on the bound proxy; `$data[]` does.
+- **You want better static analysis.** PHPStan and Psalm read a typed `Cart &$data` parameter directly. With bound `$this` they see `BoundProxy`.
+- **You want the outer `$this`.** Any callback with a parameter keeps `$this` as the surrounding class, so you can still call its methods or read its properties.
 
-The `&` is required for arrays and scalars (PHP value types). For objects it's harmless either way.
-
-#### Return-style
-
-Receive the value, return the new one. Best for replacing the whole value, especially scalars:
-
-```php
-$counter(fn ($n) => $n + 1);
-$concurrent(fn ($value) => /* ... */);
-```
+Without the `&`, the closure falls back to a Transform Callback (above). A block with no `return` writes `null` to the cache. An arrow writes the expression value, so `fn ($d) => $d->items[] = $x` writes `$x`, not the cart. Use `&`, or return the value yourself.
 
 ### 3. A wrapper subclass that owns the domain API
 
@@ -117,12 +142,10 @@ When you control neither the source nor want ad-hoc callbacks all over your code
 
 ### Outside a callback
 
-A plain overwrite like `$concurrent->value = 10` is atomic on its own: `__set` locks, writes the new value, releases. No callback needed when you're replacing a value outright.
+A plain overwrite like `$concurrent->value = 10` is its own atomic write, no callback needed. Two shapes look like single writes but aren't:
 
-What doesn't work outside a callback or method:
-
-- `$concurrent->count++` is *not* atomic. `++` is three steps under the hood: read the current value, add one, write it back. Each step locks on its own, but nothing keeps the lock held across all three. If two workers run `count++` at the same time on a value of `5`, both can read `5` before either writes, both compute `6`, and both write `6`. One increment silently vanishes. Wrap it in a callback so the read and write share a single lock.
-- `$concurrent->items[] = $x` *silently does nothing*. PHP fetches `items` by value (a copy), appends to the copy, then throws the copy away. The cache never sees the change. Wrap it in a callback to mutate the real array.
+- `$concurrent->count++` is *not* atomic. `++` is really three steps: read the value, add one, write it back. Each step locks, but nothing holds a lock across all three. If two workers both run `count++` on a value of `5`, both read `5` before either writes, both compute `6`, both write `6`. One increment is lost. Wrap it in a callback so the read and write share one lock.
+- `$concurrent->items[] = $x` *silently does nothing*. PHP fetches `items` by value (a copy), appends to the copy, throws the copy away. The cache never sees the change. Wrap it in a callback to mutate the real array.
 
 For read-modify-write or nested mutations, use one of the three patterns above.
 
@@ -247,11 +270,11 @@ Mark pure accessors as read-only to skip locking. Either `#[ReadonlyMethod]` on 
 
 Thread-safe data structures built on top of `Concurrent`:
 
-- `ConcurrentMap` — key-value map.
-- `ConcurrentSet` — collection of unique values.
-- `ConcurrentCounter` — atomic counter, optional `min`/`max`/`wrap`.
-- `ConcurrentQueue` — FIFO queue.
-- `ConcurrentList` — ordered list with chainable map/filter/each.
+- `ConcurrentMap`: key-value map.
+- `ConcurrentSet`: collection of unique values.
+- `ConcurrentCounter`: atomic counter, optional `min`/`max`/`wrap`.
+- `ConcurrentQueue`: FIFO queue.
+- `ConcurrentList`: ordered list with chainable map/filter/each.
 
 Each has its own focused API; see the source for the full method list.
 
