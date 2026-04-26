@@ -3,10 +3,8 @@
 namespace JesseGall\Concurrent;
 
 /**
- * A thread-safe ordered list backed by cache.
- *
- * Mutating methods (add/remove/map/filter/each/clear) return a chain proxy
- * that batches a fluent chain into one lock automatically — `$list->add(1)
+ * Thread-safe ordered list. Mutating methods return a chain proxy that
+ * batches a fluent chain into one lock automatically — `$list->add(1)
  * ->add(2)` is atomic; no explicit chain() call needed.
  */
 class ConcurrentList extends Concurrent
@@ -21,9 +19,6 @@ class ConcurrentList extends Concurrent
         );
     }
 
-    /**
-     * Append a value to the list.
-     */
     public function add(mixed $value): HigherOrderConcurrentChainProxy
     {
         return (new HigherOrderConcurrentChainProxy($this))->queue(
@@ -31,17 +26,12 @@ class ConcurrentList extends Concurrent
         );
     }
 
-    /**
-     * Get a value by index.
-     */
     public function get(int $index, mixed $default = null): mixed
     {
         return $this()[$index] ?? $default;
     }
 
-    /**
-     * Remove a value by index and re-index the list.
-     */
+    /** Removes by index and re-indexes the list. */
     public function remove(int $index): HigherOrderConcurrentChainProxy
     {
         return (new HigherOrderConcurrentChainProxy($this))->queue(
@@ -53,35 +43,24 @@ class ConcurrentList extends Concurrent
         );
     }
 
-    /**
-     * Get all values.
-     *
-     * @return list<mixed>
-     */
+    /** @return list<mixed> */
     public function all(): array
     {
         return $this();
     }
 
-    /**
-     * Get the number of items.
-     */
     public function count(): int
     {
         return count($this());
     }
 
-    /**
-     * Check if the list is empty.
-     */
     public function isEmpty(): bool
     {
         return $this->count() === 0;
     }
 
     /**
-     * Iterate over all items while holding the lock.
-     * Return false from the callback to break early.
+     * Iterate while holding the lock. Return false from the callback to break early.
      *
      * @param  callable(mixed $value, int $index): mixed  $callback
      */
@@ -103,13 +82,8 @@ class ConcurrentList extends Concurrent
     }
 
     /**
-     * Transform all items while holding the lock.
-     *
-     * With & — modify in-place:
-     *   $list->map(function (float &$price) { $price *= 1.1; });
-     *
-     * Without & — return value replaces the item:
-     *   $list->map(fn (float $price) => $price * 1.1);
+     * Transform each item. With & the callback mutates in place; without &
+     * its return value replaces the item.
      *
      * @param  callable(mixed $value, int $index): mixed  $callback
      */
@@ -137,7 +111,7 @@ class ConcurrentList extends Concurrent
     }
 
     /**
-     * Remove items that don't match the predicate. Re-indexes the list.
+     * Keep items where the predicate returns true. Re-indexes.
      *
      * @param  callable(mixed $value, int $index): bool  $callback
      */
@@ -148,9 +122,6 @@ class ConcurrentList extends Concurrent
         );
     }
 
-    /**
-     * Remove all items from the list.
-     */
     public function clear(): HigherOrderConcurrentChainProxy
     {
         return (new HigherOrderConcurrentChainProxy($this))->queue(

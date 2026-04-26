@@ -3,10 +3,7 @@
 namespace JesseGall\Concurrent;
 
 /**
- * A thread-safe hash map backed by cache.
- *
- * Multiple processes can safely read and write to the same map
- * without race conditions — like Java's ConcurrentMap or Go's sync.Map.
+ * Thread-safe hash map. Like Java's ConcurrentMap or Go's sync.Map.
  */
 class ConcurrentMap extends Concurrent
 {
@@ -20,43 +17,27 @@ class ConcurrentMap extends Concurrent
         );
     }
 
-    /**
-     * Get a value by key, or return the default if not found.
-     */
     public function get(string $key, mixed $default = null): mixed
     {
         return $this[$key] ?? $default;
     }
 
-    /**
-     * Set a key-value pair.
-     */
     public function set(string $key, mixed $value): void
     {
         $this(fn () => $this->{$key} = $value);
     }
 
-    /**
-     * Remove a key from the map.
-     */
     public function remove(string $key): void
     {
         $this(function () use ($key) { unset($this->{$key}); });
     }
 
-    /**
-     * Check if a key exists.
-     */
     public function has(string $key): bool
     {
         return isset($this[$key]);
     }
 
-    /**
-     * Get the entire map.
-     *
-     * @return array<string, mixed>
-     */
+    /** @return array<string, mixed> */
     public function all(): array
     {
         return $this();

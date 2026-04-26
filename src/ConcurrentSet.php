@@ -3,10 +3,7 @@
 namespace JesseGall\Concurrent;
 
 /**
- * A thread-safe set backed by cache.
- *
- * Stores unique values — duplicates are ignored.
- * Useful for tracking active users, in-progress jobs, feature flags, etc.
+ * Thread-safe collection of unique values. Duplicates are ignored.
  */
 class ConcurrentSet extends Concurrent
 {
@@ -20,51 +17,32 @@ class ConcurrentSet extends Concurrent
         );
     }
 
-    /**
-     * Add a value to the set. Duplicates are ignored.
-     */
     public function add(string $value): void
     {
         $this(fn () => $this->{$value} = true);
     }
 
-    /**
-     * Remove a value from the set.
-     */
     public function remove(string $value): void
     {
         $this(function () use ($value) { unset($this->{$value}); });
     }
 
-    /**
-     * Check if a value exists in the set.
-     */
     public function contains(string $value): bool
     {
         return isset($this[$value]);
     }
 
-    /**
-     * Get all values in the set.
-     *
-     * @return list<string>
-     */
+    /** @return list<string> */
     public function all(): array
     {
         return array_keys($this());
     }
 
-    /**
-     * Get the number of values in the set.
-     */
     public function count(): int
     {
         return count($this());
     }
 
-    /**
-     * Remove all values from the set.
-     */
     public function clear(): void
     {
         $this(fn () => []);

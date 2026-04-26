@@ -5,16 +5,8 @@ namespace JesseGall\Concurrent;
 use InvalidArgumentException;
 
 /**
- * A thread-safe counter backed by cache.
- *
- * Atomic increment, decrement, and reset — safe across processes.
- * Useful for rate limiting, visitor counts, job progress, etc.
- *
- * Supports optional bounds:
- *  - `$min` / `$max`   — inclusive clamp applied on every write.
- *  - `$wrap`           — when both bounds are set, values outside the
- *                        range wrap modulo-style (odometer / dice /
- *                        circular index) instead of clamping.
+ * Thread-safe atomic counter. Optional bounds: `min`/`max` clamp on every
+ * write; `wrap` makes out-of-range values roll over modulo-style.
  */
 class ConcurrentCounter extends Concurrent
 {
@@ -47,41 +39,27 @@ class ConcurrentCounter extends Concurrent
         );
     }
 
-    /**
-     * Increment the counter by the given amount.
-     */
     public function increment(int $amount = 1): void
     {
         $this(fn (int $count) => $this->applyBounds($count + $amount));
     }
 
-    /**
-     * Decrement the counter by the given amount.
-     */
     public function decrement(int $amount = 1): void
     {
         $this(fn (int $count) => $this->applyBounds($count - $amount));
     }
 
-    /**
-     * Get the current count.
-     */
     public function count(): int
     {
         return (int) $this();
     }
 
-    /**
-     * Reset the counter to its starting value (min, or zero when unbounded).
-     */
+    /** Reset to min when bounded, zero otherwise. */
     public function reset(): void
     {
         $this($this->min ?? 0);
     }
 
-    /**
-     * Apply clamp or wrap semantics for writes going through the counter.
-     */
     private function applyBounds(int $value): int
     {
         if ($this->wrap && $this->min !== null && $this->max !== null) {
@@ -102,12 +80,7 @@ class ConcurrentCounter extends Concurrent
         return $value;
     }
 
-    /**
-     * Validator applied on every read. Out-of-range or non-numeric
-     * cached values are treated as invalid so the next read falls back
-     * to the default (min), self-healing stale or externally-written
-     * data.
-     */
+    /** Out-of-range or non-numeric values are rejected so reads self-heal back to min. */
     private function isValidValue(mixed $value): bool
     {
         if (!is_numeric($value)) {

@@ -7,7 +7,7 @@ use ReflectionMethod;
 use ReflectionNamedType;
 
 /**
- * Queues operations and runs them all in a single lock when the chain ends
+ * Queues operations and runs them all in one lock when the chain ends
  * (terminal call, explicit flush(), or destruct).
  *
  * @mixin Concurrent
@@ -29,9 +29,6 @@ class HigherOrderConcurrentChainProxy
         }
     }
 
-    /**
-     * Append a closure to the chain — runs inside the shared lock at flush time.
-     */
     public function queue(Closure $fn): self
     {
         $this->queued[] = $fn;
@@ -66,9 +63,6 @@ class HigherOrderConcurrentChainProxy
         return $this->target->{$method}(...$arguments);
     }
 
-    /**
-     * Execute all queued closures inside a single lock and return the resulting value.
-     */
     public function flush(): mixed
     {
         if ($this->queued === [])

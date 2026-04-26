@@ -1,12 +1,12 @@
 # Concurrent
 
-Thread-safe shared state for PHP. Wrap any value — objects, arrays, scalars — in a proxy that handles locking, caching, and persistence across processes. Works with Laravel out of the box; pluggable cache and lock drivers otherwise.
+Thread-safe shared state for PHP. Wrap any value (object, array, scalar) in a proxy that handles locking, caching, and persistence across processes. Works with Laravel out of the box; pluggable cache and lock drivers otherwise.
 
 ## Why?
 
-When multiple processes (web requests, queue workers, cron jobs) need to share state, you scatter cache calls across the codebase: duplicated keys, no locking, race conditions on read-modify-write, business logic tangled with cache plumbing.
+When multiple processes (web requests, queue workers, cron jobs) share state, you scatter cache calls across the codebase: duplicated keys, no locking, race conditions on read-modify-write, business logic tangled with cache plumbing.
 
-**Concurrent** wraps the value in a thread-safe proxy. You interact with it normally — methods, properties, array ops — and it handles locking and persistence. Reads never lock. Writes are atomic.
+Concurrent wraps the value in a thread-safe proxy. You interact with it normally (methods, properties, array ops); it handles locking and persistence. Reads never lock. Writes are atomic.
 
 ## Installation
 
@@ -15,6 +15,8 @@ composer require jessegall/concurrent
 ```
 
 ## Wrapping Any Value
+
+Wrap any value by passing it (or a factory) as the `default`. The wrapper looks and acts like the value itself: methods, properties, array access all proxy through. Reads hit the cache directly; writes lock, mutate, write back.
 
 ```php
 use JesseGall\Concurrent\Concurrent;
@@ -26,52 +28,52 @@ $cart = new Concurrent(
     ttl: 1800,
 );
 
-$cart->addItem('T-Shirt', 2);  // method call — locks, writes back
-$cart->itemCount();            // method call — locks (see Read-only methods to skip)
-$cart->items;                  // property read — no lock
+$cart->addItem('T-Shirt', 2);  // method call: locks, writes back
+$cart->itemCount();            // method call: locks (see Read-only methods to skip)
+$cart->items;                  // property read: no lock
 $cart();                       // get the value
 $cart(null);                   // forget
 ```
 
 ## Atomic Updates
 
-Three ways to mutate state atomically — pick whichever fits.
+Three ways to mutate state atomically. Pick whichever fits.
 
-### 1. Methods on the wrapped class — best when you own the source
+### 1. Methods on the wrapped class
 
-The cleanest option: just put the mutation logic in a method on the wrapped class itself.
+The cleanest option when you own the source: put the mutation logic in a method on the wrapped class.
 
 ```php
 class Cart {
     public array $items = [];
 
     public function addItem(string $sku): void {
-        $this->items[] = $sku;     // ✓ plain PHP, $this is the real Cart
-        $this->lastSku = $sku;     // no proxy, no magic, full semantics
+        $this->items[] = $sku;     // plain PHP, $this is the real Cart
+        $this->lastSku = $sku;     // no proxy, no magic
     }
 }
 
 $cart = new Concurrent(key: 'cart', default: fn () => new Cart);
-$cart->addItem('shirt');           // atomic — Concurrent locks, runs the method, writes back
+$cart->addItem('shirt');           // atomic: Concurrent locks, runs the method, writes back
 ```
 
-Inside the method body, `$this` is the actual `Cart` instance — Concurrent isn't in the picture, so PHP rules apply normally (array appends, nested writes, anything works). This is the recommended approach when you control the wrapped class.
+Inside the method body, `$this` is the actual `Cart` instance. Concurrent isn't in the picture, so PHP rules apply normally (array appends, nested writes, all of it).
 
-### 2. Bound `$this` callbacks — when you can't (or don't want to) modify the wrapped class
+### 2. Bound `$this` callbacks
 
-For ad-hoc updates — or when the wrapped class is third-party / `\stdClass` / whatever — pass a zero-param closure to `$concurrent(...)`. `$this` is bound to the wrapped value (via a proxy that routes property/method access correctly):
+For ad-hoc updates, or when the wrapped class is third-party, `\stdClass`, etc., pass a zero-param closure to `$concurrent(...)`. `$this` is bound to the wrapped value via a proxy that routes property and method access correctly:
 
 ```php
 $cart(function () {
-    $this->items[] = $newItem;       // array append — works
-    $this->totals['subtotal'] = 100; // nested write — works
+    $this->items[] = $newItem;       // array append
+    $this->totals['subtotal'] = 100; // nested write
     $this->status = 'pending';
 });
 ```
 
 `$this` falls through to the Concurrent subclass for missing methods, so domain methods on your `extends Concurrent` class are reachable too. `self::`, `parent::`, and `static::` resolve to the lexical scope where the closure was defined.
 
-Arrow functions work too — terse one-liners:
+Arrow functions work too:
 
 ```php
 $counter(fn () => $this->count++);
@@ -80,7 +82,7 @@ $cart(fn () => $this->items[] = $newItem);
 
 #### By-reference parameter
 
-Take the wrapped value as a `&`-marked parameter and mutate it directly. Concurrent sees the mutated value and writes it back — no return needed.
+Take the wrapped value as a `&`-marked parameter and mutate it directly. Concurrent sees the mutated value and writes it back; no return needed.
 
 ```php
 $cart(fn (Cart &$data) => $data->items[] = $newItem);
@@ -93,11 +95,10 @@ $cart(function (Cart &$data) {
 
 When this is the right pick:
 
-- **You want a typed parameter** — `Cart &$data` gives you full IDE autocomplete and PHPStan/Psalm support inside the closure. Bound `$this` is implicitly typed as `BoundProxy` to static analyzers, which can be noisy.
-- **The wrapped value is itself an array.** Bound `$this` can't do `$this[] = X` (the proxy doesn't implement `ArrayAccess`), but `&$data[] = X` works straight off the parameter.
-- **You prefer "act on this thing" framing** over "I'm inside the thing." The parameter spelling makes the subject explicit at a glance.
+- You want a typed parameter. `Cart &$data` gives you full IDE autocomplete and PHPStan/Psalm support inside the closure. Bound `$this` is implicitly typed as `BoundProxy` to static analyzers.
+- The wrapped value is itself an array. Bound `$this` can't do `$this[] = X` (the proxy doesn't implement `ArrayAccess`); `&$data[] = X` works straight off the parameter.
 
-The `&` is required for arrays and scalars (PHP value types). For objects it's harmless either way (objects are reference types in PHP), but keep it in for consistency.
+The `&` is required for arrays and scalars (PHP value types). For objects it's harmless either way.
 
 #### Return-style
 
@@ -108,13 +109,13 @@ $counter(fn ($n) => $n + 1);
 $concurrent(fn ($value) => /* ... */);
 ```
 
-### 3. A wrapper subclass that owns the domain API — when you control neither
+### 3. A wrapper subclass that owns the domain API
 
-If the wrapped class is sealed (third-party, generated, etc.) and you still want a clean API, define your own `Concurrent` subclass with domain methods that internally use callbacks. See [Subclassing](#subclassing).
+When you control neither the source nor want ad-hoc callbacks all over your codebase, define your own `Concurrent` subclass with domain methods that internally use callbacks. See [Subclassing](#subclassing).
 
 ### Outside a callback
 
-`$concurrent->count++` *outside* any callback or method is **not** atomic — it's a read followed by a write, and another process can interleave. And `$concurrent->items[] = $x` outside a callback **silently does nothing** (PHP can't write through a by-value `__get`). Always go through one of the three patterns above.
+`$concurrent->count++` outside a callback or method is *not* atomic: it's a read followed by a write, and another process can interleave. `$concurrent->items[] = $x` outside a callback *silently does nothing* (PHP can't write through a by-value `__get`). Always go through one of the three patterns above.
 
 ## Subclassing
 
@@ -157,7 +158,7 @@ class ProcessingSession extends Concurrent
 
 ### WithAccessors
 
-Adds private `get`, `set`, `has`, `update`, `clear` helpers for use inside a subclass — building blocks for domain methods.
+Adds private `get`, `set`, `has`, `update`, `clear` helpers for use inside a subclass.
 
 ```php
 class UserActivity extends Concurrent
@@ -186,7 +187,7 @@ class UserActivity extends Concurrent
 }
 ```
 
-Private by default. Expose them per-method via PHP's trait conflict resolution: `use WithAccessors { get as public; ... }`.
+Private by default. Expose any of them via PHP's trait conflict resolution: `use WithAccessors { get as public; ... }`.
 
 ### WithPointer
 
@@ -214,11 +215,11 @@ Override `pointerKey()` for a stable key, `generateId()` for UUIDs/ULIDs/etc. Fo
 
 ## Read-only Methods
 
-For pure accessors, mark them read-only to skip locking. Either with `#[ReadonlyMethod]` on the wrapped value's method, or by listing names on a Concurrent subclass via `DeclaresReadOnlyMethods`. Mutating from a read-only method throws `ReadonlyViolationException` so silent write loss is caught early.
+Mark pure accessors as read-only to skip locking. Either `#[ReadonlyMethod]` on the wrapped value's method, or list method names on a Concurrent subclass via `DeclaresReadOnlyMethods`. Mutating from a read-only method throws `ReadonlyViolationException` so silent write loss is caught early.
 
 ## Built-in Data Structures
 
-The package ships with thread-safe data structures built on top of `Concurrent` — useful out of the box, also good reference implementations:
+Thread-safe data structures built on top of `Concurrent`:
 
 - `ConcurrentMap` — key-value map.
 - `ConcurrentSet` — collection of unique values.
@@ -226,11 +227,11 @@ The package ships with thread-safe data structures built on top of `Concurrent` 
 - `ConcurrentQueue` — FIFO queue.
 - `ConcurrentList` — ordered list with chainable map/filter/each.
 
-Each has its own short, focused API; see the source if you want the full method list.
+Each has its own focused API; see the source for the full method list.
 
 ## Using Without Laravel
 
-Implement `CacheDriver` and `LockDriver` against your backend (Redis, etc.), then register them globally:
+Implement `CacheDriver` and `LockDriver` against your backend (Redis, etc.) and register them globally:
 
 ```php
 Concurrent::useCache(new RedisCache());
@@ -239,13 +240,13 @@ Concurrent::useLock(new RedisLock());
 
 Or pass them to a single instance via the constructor's `cache:` and `lock:` arguments. For tests, the package ships `InMemoryCache` and `InMemoryLock`.
 
-With Laravel, no setup needed — the service provider auto-registers everything.
+With Laravel, no setup needed: the service provider auto-registers everything.
 
 ## How It Works
 
-**Writes lock, reads don't.** A mutating operation: acquire lock → read from cache → run the operation → write back → release. Reads (`$concurrent()`, property reads, isset, read-only methods) hit the cache directly, so they never block.
+Writes lock, reads don't. A mutating operation acquires the lock, reads from cache, runs the operation, writes back, releases. Reads (`$concurrent()`, property reads, isset, read-only methods) hit the cache directly and never block.
 
-Locks are **re-entrant**: nested writes inside a callback (e.g. multiple `$this->prop = X` inside a bound closure) reuse the outer lock — the entire callback is one atomic operation, one acquire/release pair.
+Locks are re-entrant: nested writes inside a callback (e.g. multiple `$this->prop = X` inside a bound closure) reuse the outer lock. The whole callback is one atomic operation, one acquire/release.
 
 ## Requirements
 

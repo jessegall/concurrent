@@ -3,10 +3,7 @@
 namespace JesseGall\Concurrent;
 
 /**
- * A thread-safe queue backed by cache.
- *
- * FIFO push/pop operations — safe across processes.
- * Useful for lightweight event buffers, task lists, or message passing.
+ * Thread-safe FIFO queue. Push from one process, pop from another.
  */
 class ConcurrentQueue extends Concurrent
 {
@@ -20,17 +17,11 @@ class ConcurrentQueue extends Concurrent
         );
     }
 
-    /**
-     * Push a value onto the end of the queue.
-     */
     public function push(mixed $value): void
     {
         $this(fn (array &$queue) => $queue[] = $value);
     }
 
-    /**
-     * Remove and return the first value from the queue.
-     */
     public function pop(): mixed
     {
         $popped = null;
@@ -44,9 +35,6 @@ class ConcurrentQueue extends Concurrent
         return $popped;
     }
 
-    /**
-     * Return the first value without removing it.
-     */
     public function peek(): mixed
     {
         $queue = $this();
@@ -54,25 +42,16 @@ class ConcurrentQueue extends Concurrent
         return $queue[0] ?? null;
     }
 
-    /**
-     * Get the number of items in the queue.
-     */
     public function size(): int
     {
         return count($this());
     }
 
-    /**
-     * Check if the queue is empty.
-     */
     public function isEmpty(): bool
     {
         return $this->size() === 0;
     }
 
-    /**
-     * Remove all items from the queue.
-     */
     public function clear(): void
     {
         $this(fn () => []);
