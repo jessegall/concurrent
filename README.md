@@ -35,6 +35,8 @@ $cart();                       // get the value
 $cart(null);                   // forget
 ```
 
+> **IDE tip:** add `/** @mixin ShoppingCart */` above the variable so the IDE autocompletes the wrapped class's methods on the proxy.
+
 ## Atomic Updates
 
 Three ways to mutate state atomically. Pick whichever fits.
@@ -119,9 +121,10 @@ When you control neither the source nor want ad-hoc callbacks all over your code
 
 ## Subclassing
 
-Encapsulate the key, default, TTL, and domain methods:
+Encapsulate the key, default, TTL, and domain methods. Add `@mixin` so the IDE picks up the wrapped class's methods on the subclass too:
 
 ```php
+/** @mixin SessionData */
 class ProcessingSession extends Concurrent
 {
     public function __construct(string $id)
