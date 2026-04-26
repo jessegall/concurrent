@@ -6,7 +6,7 @@ Thread-safe shared state for PHP. Wrap any value (object, array, scalar) in a pr
 
 When multiple processes (web requests, queue workers, cron jobs) share state, you scatter cache calls across the codebase: duplicated keys, no locking, race conditions on read-modify-write, business logic tangled with cache plumbing.
 
-Concurrent wraps the value in a thread-safe proxy. You interact with it normally (methods, properties, array ops); it handles locking and persistence. Reads never lock. Writes are atomic.
+Concurrent wraps the value in a thread-safe proxy. You interact with it normally; it handles locking and persistence. Writes are atomic.
 
 ## Installation
 
