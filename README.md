@@ -78,11 +78,34 @@ $counter(fn () => $this->count++);
 $cart(fn () => $this->items[] = $newItem);
 ```
 
-Other supported callback shapes:
+#### By-reference parameter
+
+Take the wrapped value as a `&`-marked parameter and mutate it directly. Concurrent sees the mutated value and writes it back — no return needed.
 
 ```php
-$cart(fn (Cart &$data) => $data->items[] = $newItem); // by-reference param
-$counter(fn ($n) => $n + 1);                          // return-style
+$cart(fn (Cart &$data) => $data->items[] = $newItem);
+
+$cart(function (Cart &$data) {
+    $data->items[] = $newItem;
+    $data->totals['count']++;
+});
+```
+
+When this is the right pick:
+
+- **You want a typed parameter** — `Cart &$data` gives you full IDE autocomplete and PHPStan/Psalm support inside the closure. Bound `$this` is implicitly typed as `BoundProxy` to static analyzers, which can be noisy.
+- **The wrapped value is itself an array.** Bound `$this` can't do `$this[] = X` (the proxy doesn't implement `ArrayAccess`), but `&$data[] = X` works straight off the parameter.
+- **You prefer "act on this thing" framing** over "I'm inside the thing." The parameter spelling makes the subject explicit at a glance.
+
+The `&` is required for arrays and scalars (PHP value types). For objects it's harmless either way (objects are reference types in PHP), but keep it in for consistency.
+
+#### Return-style
+
+Receive the value, return the new one. Best for replacing the whole value, especially scalars:
+
+```php
+$counter(fn ($n) => $n + 1);
+$concurrent(fn ($value) => /* ... */);
 ```
 
 ### 3. A wrapper subclass that owns the domain API — when you control neither
