@@ -141,15 +141,6 @@ Without the `&`, the closure falls back to a Transform Callback (above). A block
 
 When you control neither the source nor want ad-hoc callbacks all over your codebase, define your own `Concurrent` subclass with domain methods that internally use callbacks. See [Subclassing](#subclassing).
 
-### Outside a callback
-
-A plain overwrite like `$concurrent->value = 10` is its own atomic write, no callback needed. Two shapes look like single writes but aren't:
-
-- `$concurrent->count++` is *not* atomic. `++` is really three steps: read the value, add one, write it back. Each step locks, but nothing holds a lock across all three. If two workers both run `count++` on a value of `5`, both read `5` before either writes, both compute `6`, both write `6`. One increment is lost. Wrap it in a callback so the read and write share one lock.
-- `$concurrent->items[] = $x` *silently does nothing*. PHP fetches `items` by value (a copy), appends to the copy, throws the copy away. The cache never sees the change. Wrap it in a callback to mutate the real array.
-
-For read-modify-write or nested mutations, use one of the three patterns above.
-
 ## Subclassing
 
 Encapsulate the key, default, TTL, and domain methods. Add `@extends Concurrent<T>` so the IDE picks up the wrapped class's methods on the subclass too. If your IDE doesn't resolve the generic and apply the `@mixin` through it, fall back to `/** @mixin T */` on the subclass:
@@ -314,6 +305,15 @@ With Laravel, no setup needed: the service provider auto-registers everything.
 Writes lock, reads don't. A mutating operation acquires the lock, reads from cache, runs the operation, writes back, releases. Reads (`$concurrent()`, property reads, isset, read-only methods) hit the cache directly and never block.
 
 Locks are re-entrant: nested writes inside a callback (e.g. multiple `$this->prop = X` inside a bound closure) reuse the outer lock. The whole callback is one atomic operation, one acquire/release.
+
+## Caveats
+
+A plain overwrite like `$concurrent->value = 10` is its own atomic write, no callback needed. Two shapes look like single writes but aren't:
+
+- `$concurrent->count++` is *not* atomic. `++` is really three steps: read the value, add one, write it back. Each step locks, but nothing holds a lock across all three. If two workers both run `count++` on a value of `5`, both read `5` before either writes, both compute `6`, both write `6`. One increment is lost. Wrap it in a callback so the read and write share one lock.
+- `$concurrent->items[] = $x` *silently does nothing*. PHP fetches `items` by value (a copy), appends to the copy, throws the copy away. The cache never sees the change. Wrap it in a callback to mutate the real array.
+
+For read-modify-write or nested mutations, use a callback.
 
 ## Requirements
 
