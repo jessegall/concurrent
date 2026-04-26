@@ -66,8 +66,8 @@ class Cart {
     public array $items = [];
 
     public function addItem(string $sku): void {
-        $this->items[] = $sku;     // plain PHP, $this is the real Cart
-        $this->lastSku = $sku;     // no proxy, no magic
+        $this->items[] = $sku;     
+        $this->lastSku = $sku;    
     }
 }
 
