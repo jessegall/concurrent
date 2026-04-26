@@ -121,8 +121,8 @@ A plain overwrite like `$concurrent->value = 10` is atomic on its own: `__set` l
 
 What doesn't work outside a callback or method:
 
-- `$concurrent->count++` is *not* atomic. It's a read followed by a write, and another process can interleave between them.
-- `$concurrent->items[] = $x` *silently does nothing*. PHP can't write through a by-value `__get`.
+- `$concurrent->count++` is *not* atomic. `++` is three steps under the hood: read the current value, add one, write it back. Each step locks on its own, but nothing keeps the lock held across all three. If two workers run `count++` at the same time on a value of `5`, both can read `5` before either writes, both compute `6`, and both write `6`. One increment silently vanishes. Wrap it in a callback so the read and write share a single lock.
+- `$concurrent->items[] = $x` *silently does nothing*. PHP fetches `items` by value (a copy), appends to the copy, then throws the copy away. The cache never sees the change. Wrap it in a callback to mutate the real array.
 
 For read-modify-write or nested mutations, use one of the three patterns above.
 
