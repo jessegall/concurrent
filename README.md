@@ -31,6 +31,7 @@ $cart = new Concurrent(
 $cart->addItem('T-Shirt', 2);  // method call: locks, writes back
 $cart->itemCount();            // method call: locks (see Read-only methods to skip)
 $cart->items;                  // property read: no lock
+$cart->couponCode = 'SAVE10';  // property write: locks, writes back
 $cart();                       // get the value
 $cart(null);                   // forget
 ```
@@ -116,7 +117,14 @@ When you control neither the source nor want ad-hoc callbacks all over your code
 
 ### Outside a callback
 
-`$concurrent->count++` outside a callback or method is *not* atomic: it's a read followed by a write, and another process can interleave. `$concurrent->items[] = $x` outside a callback *silently does nothing* (PHP can't write through a by-value `__get`). Always go through one of the three patterns above.
+A plain overwrite like `$concurrent->value = 10` is atomic on its own: `__set` locks, writes the new value, releases. No callback needed when you're replacing a value outright.
+
+What doesn't work outside a callback or method:
+
+- `$concurrent->count++` is *not* atomic. It's a read followed by a write, and another process can interleave between them.
+- `$concurrent->items[] = $x` *silently does nothing*. PHP can't write through a by-value `__get`.
+
+For read-modify-write or nested mutations, use one of the three patterns above.
 
 ## Subclassing
 
