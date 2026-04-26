@@ -35,8 +35,6 @@ $cart();                       // get the value
 $cart(null);                   // forget
 ```
 
-> **IDE tip:** add `/** @mixin ShoppingCart */` above the variable so the IDE autocompletes the wrapped class's methods on the proxy.
-
 ## Atomic Updates
 
 Three ways to mutate state atomically. Pick whichever fits.
@@ -55,6 +53,7 @@ class Cart {
     }
 }
 
+/** @var Concurrent<Cart> $cart */
 $cart = new Concurrent(key: 'cart', default: fn () => new Cart);
 $cart->addItem('shirt');           // atomic: Concurrent locks, runs the method, writes back
 ```
@@ -97,8 +96,8 @@ $cart(function (Cart &$data) {
 
 When this is the right pick:
 
-- You want a typed parameter. `Cart &$data` gives you full IDE autocomplete and PHPStan/Psalm support inside the closure. Bound `$this` is implicitly typed as `BoundProxy` to static analyzers.
 - The wrapped value is itself an array. Bound `$this` can't do `$this[] = X` (the proxy doesn't implement `ArrayAccess`); `&$data[] = X` works straight off the parameter.
+- You want explicit PHPStan/Psalm support. A typed `Cart &$data` parameter is recognized by static analyzers; bound `$this` resolves to `BoundProxy` instead. (Generic `@extends Concurrent<Cart>` / `@var Concurrent<Cart>` annotations already cover IDE autocomplete on bound `$this`.)
 
 The `&` is required for arrays and scalars (PHP value types). For objects it's harmless either way.
 
@@ -121,10 +120,10 @@ When you control neither the source nor want ad-hoc callbacks all over your code
 
 ## Subclassing
 
-Encapsulate the key, default, TTL, and domain methods. Add `@mixin` so the IDE picks up the wrapped class's methods on the subclass too:
+Encapsulate the key, default, TTL, and domain methods. Add `@extends Concurrent<T>` so the IDE picks up the wrapped class's methods on the subclass too. If your IDE doesn't resolve the generic and apply the `@mixin` through it, fall back to `/** @mixin T */` on the subclass:
 
 ```php
-/** @mixin SessionData */
+/** @extends Concurrent<SessionData> */
 class ProcessingSession extends Concurrent
 {
     public function __construct(string $id)
@@ -166,6 +165,7 @@ Concurrent's public surface is deliberately small. Every method on `Concurrent` 
 Opt-in helpers (`get`, `set`, `has`, `update`, `clear`) for subclasses that want them. Kept off the base class so they don't shadow methods on whatever you wrap.
 
 ```php
+/** @extends Concurrent<ActivityData> */
 class UserActivity extends Concurrent
 {
     use WithAccessors;
