@@ -159,9 +159,11 @@ class ProcessingSession extends Concurrent
 
 ## Helper Traits
 
+Concurrent's public surface is deliberately small. Every method on `Concurrent` is one that can't appear on the wrapped value or a subclass, so wrapping a raw value or extending `Concurrent` with your own domain methods doesn't collide with the proxy's API.
+
 ### WithAccessors
 
-Adds private `get`, `set`, `has`, `update`, `clear` helpers for use inside a subclass.
+Opt-in helpers (`get`, `set`, `has`, `update`, `clear`) for subclasses that want them. Kept off the base class so they don't shadow methods on whatever you wrap.
 
 ```php
 class UserActivity extends Concurrent
@@ -190,7 +192,20 @@ class UserActivity extends Concurrent
 }
 ```
 
-Private by default. Expose any of them via PHP's trait conflict resolution: `use WithAccessors { get as public; ... }`.
+Private by default. Expose any of them via PHP's trait conflict resolution:
+
+```php
+class Settings extends Concurrent
+{
+    use WithAccessors {
+        get as public;
+        set as public;
+    }
+}
+
+$settings->set('theme', 'dark');
+$settings->get('theme');
+```
 
 ### WithPointer
 
