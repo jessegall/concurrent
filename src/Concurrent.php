@@ -118,6 +118,12 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     }
 
     /**
+     * When true, reads acquire the lock too. Useful when you need to block
+     * during a concurrent write instead of reading stale data.
+     */
+    private readonly bool $readLock;
+
+    /**
      * @param string|null $key Explicit cache key. When null, auto-generated from the owning class and property name.
      * @param TValue|callable(): TValue $default Default value on cache miss. Callables are resolved lazily.
      * @param int|null $ttl Cache TTL in seconds. Null (the default) stores forever — cache-until-forgotten.
@@ -125,6 +131,7 @@ class Concurrent implements ArrayAccess, IteratorAggregate
      * @param Cache|null $cache Cache backend. When null, resolved from Laravel's container.
      * @param Lock|null $lock Lock backend. When null, resolved from Laravel's container.
      * @param int $lockDuration Maximum seconds a lock is held before auto-release.
+     * @param bool $readLock When true, reads acquire the lock too — they wait for any in-flight write before returning. Default false (reads don't lock).
      */
     public function __construct(
         string|null      $key = null,
@@ -134,11 +141,13 @@ class Concurrent implements ArrayAccess, IteratorAggregate
         CacheDriver|null $cache = null,
         LockDriver|null  $lock = null,
         int              $lockDuration = 10,
+        bool             $readLock = false,
     )
     {
         $this->default = $default;
         $this->ttl = $ttl;
         $this->lockDuration = $lockDuration;
+        $this->readLock = $readLock;
         $this->validator = new ConcurrentValueValidator($validator);
         $this->cacheDriver = $cache ?? $this->resolveDefaultCache();
         $this->lockDriver = $lock ?? $this->resolveDefaultLock();
@@ -183,16 +192,15 @@ class Concurrent implements ArrayAccess, IteratorAggregate
     /**
      * Get, set, or forget the cached value.
      *
-     * - No arguments: returns the current value (no lock)
-     * - Null: clears the value
-     * - Callable: executes with current value, stores the result (use &$param for by-reference)
-     * - Other: stores the value directly
+     * - No arguments: returns the current value (no lock unless readLock is enabled).
+     * - Null: clears the value.
+     * - Callable: runs as an atomic update — bound $this, by-reference param, or return-style.
+     * - Other: stores the value directly.
      *
      * @param  TValue|callable(TValue): TValue|null  $value
-     * @param  bool  $lock  When true, acquires a lock and passes $this to the callable.
      * @return TValue|void
      */
-    public function __invoke(mixed $value = null, bool $lock = false)
+    public function __invoke(mixed $value = null)
     {
         if (func_num_args() === 0)
         {
@@ -204,16 +212,6 @@ class Concurrent implements ArrayAccess, IteratorAggregate
             $this->lock()->forget();
 
             return;
-        }
-
-        if ($lock)
-        {
-            if (! is_callable($value))
-            {
-                throw new InvalidArgumentException('Lock mode requires a callable.');
-            }
-
-            return $this->lock(fn () => $value($this));
         }
 
         $this->lock()->set($value);
@@ -308,19 +306,26 @@ class Concurrent implements ArrayAccess, IteratorAggregate
 
     /**
      * Read the cached value. Falls back to default if missing or invalid.
+     * When readLock is enabled, the read happens under the lock so it blocks
+     * during in-flight writes (re-entrant — nested reads inside a write reuse
+     * the outer lock, no double acquire).
      *
      * @return TValue
      */
     private function get(): mixed
     {
-        $value = $this->cacheDriver->get($this->key, fn() => $this->resolveDefaultValue());
+        $fetch = function (): mixed {
+            $value = $this->cacheDriver->get($this->key, fn() => $this->resolveDefaultValue());
 
-        if ($this->validator->invalid($value)) {
-            $value = $this->resolveDefaultValue();
-            $this->forget();
-        }
+            if ($this->validator->invalid($value)) {
+                $value = $this->resolveDefaultValue();
+                $this->forget();
+            }
 
-        return $value;
+            return $value;
+        };
+
+        return $this->readLock ? $this->lock($fetch) : $fetch();
     }
 
     /**

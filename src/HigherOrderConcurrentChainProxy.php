@@ -2,15 +2,20 @@
 
 namespace JesseGall\Concurrent;
 
+use Closure;
+use ReflectionMethod;
+use ReflectionNamedType;
+
 /**
- * Collects method calls and executes them all inside a single lock on destruct.
+ * Queues operations and runs them all in a single lock when the chain ends
+ * (terminal call, explicit flush(), or destruct).
  *
  * @mixin Concurrent
  */
 class HigherOrderConcurrentChainProxy
 {
-    /** @var list<array{string, array<mixed>}> */
-    private array $calls = [];
+    /** @var list<Closure> */
+    private array $queued = [];
 
     public function __construct(
         private readonly Concurrent $target,
@@ -18,40 +23,85 @@ class HigherOrderConcurrentChainProxy
 
     public function __destruct()
     {
-        $this->flush();
+        if ($this->queued !== [])
+        {
+            $this->flush();
+        }
     }
 
-    public function __call(string $method, array $arguments): self
+    /**
+     * Append a closure to the chain — runs inside the shared lock at flush time.
+     */
+    public function queue(Closure $fn): self
     {
-        $this->calls[] = [$method, $arguments];
+        $this->queued[] = $fn;
 
         return $this;
     }
 
+    public function __call(string $method, array $arguments): mixed
+    {
+        if (! method_exists($this->target, $method))
+        {
+            $this->flush();
+
+            return $this->target->{$method}(...$arguments);
+        }
+
+        if ($this->returnsChainProxy($method))
+        {
+            $next = $this->target->{$method}(...$arguments);
+
+            if ($next instanceof self)
+            {
+                array_push($this->queued, ...$next->queued);
+                $next->queued = [];
+            }
+
+            return $this;
+        }
+
+        $this->flush();
+
+        return $this->target->{$method}(...$arguments);
+    }
+
     /**
-     * Execute all queued calls inside a single lock and return the resulting value.
+     * Execute all queued closures inside a single lock and return the resulting value.
      */
     public function flush(): mixed
     {
-        if (empty($this->calls))
+        if ($this->queued === [])
         {
             return ($this->target)();
         }
 
-        $calls = $this->calls;
-        $this->calls = [];
+        $queued = $this->queued;
+        $this->queued = [];
 
         $result = null;
 
-        ($this->target)(function (Concurrent $target) use ($calls, &$result) {
-            foreach ($calls as [$method, $arguments])
+        ($this->target)(function () use ($queued, &$result) {
+            foreach ($queued as $fn)
             {
-                $target->{$method}(...$arguments);
+                $fn();
             }
 
-            $result = $target();
-        }, lock: true);
+            $result = $this();
+        });
 
         return $result;
+    }
+
+    private function returnsChainProxy(string $method): bool
+    {
+        $type = (new ReflectionMethod($this->target, $method))->getReturnType();
+
+        if (! $type instanceof ReflectionNamedType)
+        {
+            return false;
+        }
+
+        return $type->getName() === self::class;
     }
 }

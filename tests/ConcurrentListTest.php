@@ -304,9 +304,8 @@ class ConcurrentListTest extends TestCase
         $list->add(4);
         $list->add(5);
 
-        $list->chain()
-            ->map(fn (int $v) => $v * 2)
-            ->filter(fn (int $v) => $v > 4);
+        $list->map(fn (int $v) => $v * 2)
+             ->filter(fn (int $v) => $v > 4);
 
         $this->assertSame([6, 8, 10], $list->all());
     }
@@ -344,9 +343,8 @@ class ConcurrentListTest extends TestCase
 
         $lockLog = [];
 
-        $list->chain()
-            ->map(fn (int $v) => $v * 10)
-            ->filter(fn (int $v) => $v > 10);
+        $list->map(fn (int $v) => $v * 10)
+             ->filter(fn (int $v) => $v > 10);
 
         // One acquire + release for the entire chain
         $this->assertSame(['acquire', 'release'], $lockLog);
@@ -363,107 +361,13 @@ class ConcurrentListTest extends TestCase
 
         $collected = [];
 
-        $list->chain()
-            ->map(fn (int $v) => $v + 1)
-            ->each(function (int $v) use (&$collected) {
+        $list->map(fn (int $v) => $v + 1)
+             ->each(function (int $v) use (&$collected) {
                 $collected[] = $v;
             });
 
         $this->assertSame([11, 21, 31], $collected);
         $this->assertSame([11, 21, 31], $list->all());
-    }
-
-    // ----------[ lock: true ]----------
-
-    public function test_lock_true_holds_single_lock_for_all_operations(): void
-    {
-        $lockLog = [];
-
-        $lock = new class($lockLog) implements LockDriver {
-            private array $log;
-
-            public function __construct(array &$log)
-            {
-                $this->log = &$log;
-            }
-
-            public function acquire(string $key, int $ttl, int $timeout, callable $callback): mixed
-            {
-                $this->log[] = 'acquire';
-                $result = $callback();
-                $this->log[] = 'release';
-
-                return $result;
-            }
-        };
-
-        Concurrent::useCache(new InMemoryCache);
-        Concurrent::useLock($lock);
-
-        $list = new ConcurrentList(key: 'test:list-lock-true');
-
-        $list->add(1);
-        $list->add(2);
-        $list->add(3);
-
-        $lockLog = [];
-
-        $list(function (ConcurrentList $list) {
-            $list->map(fn (int $v) => $v * 10)
-                 ->filter(fn (int $v) => $v > 10);
-        }, lock: true);
-
-        // One acquire + release for the entire block
-        $this->assertSame(['acquire', 'release'], $lockLog);
-        $this->assertSame([20, 30], $list->all());
-    }
-
-    public function test_lock_true_map_then_filter(): void
-    {
-        $list = new ConcurrentList('test:list-lock-mf');
-
-        $list->add(1);
-        $list->add(2);
-        $list->add(3);
-        $list->add(4);
-        $list->add(5);
-
-        $list(function (ConcurrentList $list) {
-            $list->map(fn (int $v) => $v * 2)
-                 ->filter(fn (int $v) => $v > 4);
-        }, lock: true);
-
-        $this->assertSame([6, 8, 10], $list->all());
-    }
-
-    public function test_lock_true_with_each(): void
-    {
-        $list = new ConcurrentList('test:list-lock-each');
-
-        $list->add(10);
-        $list->add(20);
-        $list->add(30);
-
-        $collected = [];
-
-        $list(function (ConcurrentList $list) use (&$collected) {
-            $list->map(fn (int $v) => $v + 1)
-                 ->each(function (int $v) use (&$collected) {
-                     $collected[] = $v;
-                 });
-        }, lock: true);
-
-        $this->assertSame([11, 21, 31], $collected);
-        $this->assertSame([11, 21, 31], $list->all());
-    }
-
-    public function test_lock_true_throws_for_non_callable(): void
-    {
-        $list = new ConcurrentList('test:list-lock-throw');
-
-        $this->expectException(\InvalidArgumentException::class);
-
-        $list(42, lock: true);
     }
 
     // ----------[ persistence ]----------

@@ -139,6 +139,145 @@ class ConcurrentTest extends TestCase
         $this->assertSame(42, $concurrent());
     }
 
+    public function test_read_lock_acquires_on_read(): void
+    {
+        $lockLog = [];
+
+        $lock = new class($lockLog) implements \JesseGall\Concurrent\Contracts\LockDriver {
+            private array $log;
+
+            public function __construct(array &$log)
+            {
+                $this->log = &$log;
+            }
+
+            public function acquire(string $key, int $ttl, int $timeout, callable $callback): mixed
+            {
+                $this->log[] = 'acquire';
+                $result = $callback();
+                $this->log[] = 'release';
+
+                return $result;
+            }
+        };
+
+        Concurrent::useCache(new \JesseGall\Concurrent\Testing\InMemoryCache);
+        Concurrent::useLock($lock);
+
+        $concurrent = new Concurrent(
+            key: 'test:read-lock',
+            default: 42,
+            ttl: 60,
+            readLock: true,
+        );
+
+        $lockLog = [];
+
+        $value = $concurrent();
+
+        $this->assertSame(42, $value);
+        $this->assertSame(['acquire', 'release'], $lockLog);
+    }
+
+    public function test_read_lock_disabled_by_default(): void
+    {
+        $lockLog = [];
+
+        $lock = new class($lockLog) implements \JesseGall\Concurrent\Contracts\LockDriver {
+            private array $log;
+
+            public function __construct(array &$log)
+            {
+                $this->log = &$log;
+            }
+
+            public function acquire(string $key, int $ttl, int $timeout, callable $callback): mixed
+            {
+                $this->log[] = 'acquire';
+                $result = $callback();
+                $this->log[] = 'release';
+
+                return $result;
+            }
+        };
+
+        Concurrent::useCache(new \JesseGall\Concurrent\Testing\InMemoryCache);
+        Concurrent::useLock($lock);
+
+        $concurrent = new Concurrent(key: 'test:read-no-lock', default: 42, ttl: 60);
+
+        $lockLog = [];
+
+        $concurrent();
+
+        $this->assertSame([], $lockLog);
+    }
+
+    public function test_read_lock_blocks_during_in_flight_write(): void
+    {
+        $lock = new BlockingLock;
+        Concurrent::useLock($lock);
+
+        $concurrent = new Concurrent(
+            key: 'test:read-lock-blocks',
+            default: 1,
+            ttl: 60,
+            readLock: true,
+        );
+
+        $lock->hold();
+
+        // With readLock, even reads attempt to acquire the lock and surface
+        // the contention (instead of silently reading stale data).
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Lock is already held');
+
+        $concurrent();
+    }
+
+    public function test_read_lock_is_reentrant_inside_a_write(): void
+    {
+        // A read inside a callback should reuse the outer lock, not double-acquire.
+        $lockLog = [];
+
+        $lock = new class($lockLog) implements \JesseGall\Concurrent\Contracts\LockDriver {
+            private array $log;
+
+            public function __construct(array &$log)
+            {
+                $this->log = &$log;
+            }
+
+            public function acquire(string $key, int $ttl, int $timeout, callable $callback): mixed
+            {
+                $this->log[] = 'acquire';
+                $result = $callback();
+                $this->log[] = 'release';
+
+                return $result;
+            }
+        };
+
+        Concurrent::useCache(new \JesseGall\Concurrent\Testing\InMemoryCache);
+        Concurrent::useLock($lock);
+
+        $concurrent = new Concurrent(
+            key: 'test:read-lock-reentrant',
+            default: fn () => new \stdClass,
+            ttl: 60,
+            readLock: true,
+        );
+
+        $concurrent(function () {});
+        $lockLog = [];
+
+        $concurrent(function () {
+            $value = $this();   // read from inside the bound write
+        });
+
+        $this->assertSame(['acquire', 'release'], $lockLog);
+    }
+
     public function test_write_blocks_when_lock_is_held(): void
     {
         $lock = new BlockingLock;

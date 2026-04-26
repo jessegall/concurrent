@@ -5,9 +5,9 @@ namespace JesseGall\Concurrent;
 /**
  * A thread-safe ordered list backed by cache.
  *
- * Allows duplicates and preserves insertion order.
- * Methods are chainable. Use `lock: true` on __invoke to batch
- * multiple operations under a single lock.
+ * Mutating methods (add/remove/map/filter/each/clear) return a chain proxy
+ * that batches a fluent chain into one lock automatically — `$list->add(1)
+ * ->add(2)` is atomic; no explicit chain() call needed.
  */
 class ConcurrentList extends Concurrent
 {
@@ -24,11 +24,11 @@ class ConcurrentList extends Concurrent
     /**
      * Append a value to the list.
      */
-    public function add(mixed $value): static
+    public function add(mixed $value): HigherOrderConcurrentChainProxy
     {
-        $this(fn (array &$list) => $list[] = $value);
-
-        return $this;
+        return (new HigherOrderConcurrentChainProxy($this))->queue(
+            fn () => $this(fn (array &$list) => $list[] = $value),
+        );
     }
 
     /**
@@ -42,13 +42,15 @@ class ConcurrentList extends Concurrent
     /**
      * Remove a value by index and re-index the list.
      */
-    public function remove(int $index): static
+    public function remove(int $index): HigherOrderConcurrentChainProxy
     {
-        $this(function (array &$list) use ($index) {
-            array_splice($list, $index, 1);
-        });
-
-        return $this;
+        return (new HigherOrderConcurrentChainProxy($this))->queue(
+            function () use ($index) {
+                $this(function (array &$list) use ($index) {
+                    array_splice($list, $index, 1);
+                });
+            },
+        );
     }
 
     /**
@@ -78,38 +80,26 @@ class ConcurrentList extends Concurrent
     }
 
     /**
-     * Start a chain of operations that execute inside a single lock.
-     *
-     *   $list->chain()
-     *        ->map(fn (float $price) => $price * 1.1)
-     *        ->filter(fn (float $price) => $price > 15);
-     *
-     * @return HigherOrderConcurrentChainProxy
-     */
-    public function chain(): HigherOrderConcurrentChainProxy
-    {
-        return new HigherOrderConcurrentChainProxy($this);
-    }
-
-    /**
      * Iterate over all items while holding the lock.
      * Return false from the callback to break early.
      *
      * @param  callable(mixed $value, int $index): mixed  $callback
      */
-    public function each(callable $callback): static
+    public function each(callable $callback): HigherOrderConcurrentChainProxy
     {
-        $this(function (array &$list) use ($callback) {
-            foreach ($list as $index => $value)
-            {
-                if ($callback($value, $index) === false)
-                {
-                    break;
-                }
-            }
-        });
-
-        return $this;
+        return (new HigherOrderConcurrentChainProxy($this))->queue(
+            function () use ($callback) {
+                $this(function (array &$list) use ($callback) {
+                    foreach ($list as $index => $value)
+                    {
+                        if ($callback($value, $index) === false)
+                        {
+                            break;
+                        }
+                    }
+                });
+            },
+        );
     }
 
     /**
@@ -123,25 +113,27 @@ class ConcurrentList extends Concurrent
      *
      * @param  callable(mixed $value, int $index): mixed  $callback
      */
-    public function map(callable $callback): static
+    public function map(callable $callback): HigherOrderConcurrentChainProxy
     {
-        $byReference = CallableInspector::acceptsByReference($callback);
+        return (new HigherOrderConcurrentChainProxy($this))->queue(
+            function () use ($callback) {
+                $byReference = CallableInspector::acceptsByReference($callback);
 
-        $this(function (array &$list) use ($callback, $byReference) {
-            foreach ($list as $index => &$value)
-            {
-                if ($byReference)
-                {
-                    $callback($value, $index);
-                }
-                else
-                {
-                    $value = $callback($value, $index);
-                }
-            }
-        });
-
-        return $this;
+                $this(function (array &$list) use ($callback, $byReference) {
+                    foreach ($list as $index => &$value)
+                    {
+                        if ($byReference)
+                        {
+                            $callback($value, $index);
+                        }
+                        else
+                        {
+                            $value = $callback($value, $index);
+                        }
+                    }
+                });
+            },
+        );
     }
 
     /**
@@ -149,20 +141,20 @@ class ConcurrentList extends Concurrent
      *
      * @param  callable(mixed $value, int $index): bool  $callback
      */
-    public function filter(callable $callback): static
+    public function filter(callable $callback): HigherOrderConcurrentChainProxy
     {
-        $this(fn (array $list) => array_values(array_filter($list, $callback, ARRAY_FILTER_USE_BOTH)));
-
-        return $this;
+        return (new HigherOrderConcurrentChainProxy($this))->queue(
+            fn () => $this(fn (array $list) => array_values(array_filter($list, $callback, ARRAY_FILTER_USE_BOTH))),
+        );
     }
 
     /**
      * Remove all items from the list.
      */
-    public function clear(): static
+    public function clear(): HigherOrderConcurrentChainProxy
     {
-        $this(fn () => []);
-
-        return $this;
+        return (new HigherOrderConcurrentChainProxy($this))->queue(
+            fn () => $this(fn () => []),
+        );
     }
 }

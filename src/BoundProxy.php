@@ -107,4 +107,9 @@ final class BoundProxy
 
         return $this->wrapper->{$name}(...$arguments);
     }
+
+    public function __invoke(): mixed
+    {
+        return ($this->wrapper)();
+    }
 }
