@@ -6,6 +6,7 @@ use Closure;
 use JesseGall\Concurrent\Attributes\ReadonlyMethod;
 use JesseGall\Concurrent\Exceptions\ReadonlyViolationException;
 use ReflectionMethod;
+use Throwable;
 
 /**
  * Decides whether a method on the wrapped value is read-only and runs it
@@ -44,10 +45,10 @@ final class ReadonlyMethodInvoker
      */
     public function invoke(mixed $target, string $name, array $arguments): mixed
     {
-        $before = serialize($target);
+        $before = $this->snapshot($target);
         $result = ($this->forwarder)($target, $name, $arguments);
 
-        if (serialize($target) !== $before) {
+        if ($before !== null && $this->snapshot($target) !== $before) {
             $class = is_object($target) ? $target::class : gettype($target);
 
             throw new ReadonlyViolationException(
@@ -56,6 +57,22 @@ final class ReadonlyMethodInvoker
         }
 
         return $result;
+    }
+
+    /**
+     * A comparable image of the value, or null when it cannot produce one.
+     *
+     * Not every value is serializable — a closure, a resource handle, a test double. Reading
+     * one is still perfectly legal, so the mutation check steps aside rather than turning a
+     * working read into a crash.
+     */
+    private function snapshot(mixed $target): ?string
+    {
+        try {
+            return serialize($target);
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     private function compute(mixed $target, string $name): bool

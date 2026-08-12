@@ -149,6 +149,30 @@ class ReadonlyAttributeTest extends TestCase
         $concurrent->mutateOnRead();
     }
 
+    public function test_a_value_that_cannot_be_serialized_is_still_readable(): void
+    {
+        $concurrent = new Concurrent(
+            key: 'test:unserializable-read',
+            default: fn () => new UnserializableTarget,
+            ttl: 60,
+        );
+
+        $this->assertSame('idle', $concurrent->describe());
+    }
+
+    public function test_a_value_that_cannot_be_serialized_reports_no_false_violation(): void
+    {
+        $concurrent = new Concurrent(
+            key: 'test:unserializable-mutation',
+            default: fn () => new UnserializableTarget,
+            ttl: 60,
+        );
+
+        // Without a snapshot to compare against the mutation cannot be seen, so the call has
+        // to pass rather than fail for the wrong reason.
+        $this->assertSame(1, $concurrent->violatesReadonly());
+    }
+
     public function test_non_object_target_ignores_attribute_lookup(): void
     {
         // Attributes only exist on object methods. With a scalar target,
@@ -192,6 +216,36 @@ class ReadonlyAttributeTarget
     public function bump(): void
     {
         $this->count++;
+    }
+}
+
+/**
+ * Holds a closure, so PHP refuses to serialize it — the shape of any value carrying a
+ * resource handle, a connection, or a test double.
+ */
+class UnserializableTarget
+{
+    public int $count = 0;
+
+    public \Closure $onRead;
+
+    public function __construct()
+    {
+        $this->onRead = static fn (): string => 'idle';
+    }
+
+    #[ReadonlyMethod]
+    public function describe(): string
+    {
+        return ($this->onRead)();
+    }
+
+    #[ReadonlyMethod]
+    public function violatesReadonly(): int
+    {
+        $this->count++;
+
+        return $this->count;
     }
 }
 
